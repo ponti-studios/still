@@ -24,6 +24,10 @@ pnpm --filter @hominem/api exec tsx scripts/import-possessions.ts --email you@ex
 
 Re-running is safe: rows are matched on the sheet's own ids (`ITM-*`, `CON-*`).
 
+## UI
+
+Components, tokens and theming come from [`@ponti-studios/ui`](https://www.npmjs.com/package/@ponti-studios/ui) (installed from public npm; it ships TypeScript source that Vite transpiles). Styling is Tailwind v4: `src/style.css` imports `tailwindcss` and the package's `styles.css` and points `@source` at the package so its classes are generated. Build screens from the package's Button, Badge, Card, Dialog, DropdownMenu, Select, Table, etc. rather than custom CSS.
+
 ## What it does
 
 Mobile-first: a bottom tab bar and bottom sheets on phones, a sidebar and modals from 768px, a table view from 1024px.
