@@ -17,7 +17,9 @@ export type ItemActions = {
   onDelete: (item: Item) => void;
 };
 
+// Category names are free text, so real options are prefixed to never collide with the ALL sentinel.
 const ALL = 'all';
+const catValue = (c: string) => `c:${c}`;
 const SORTS: { value: SortKey; label: string }[] = [
   { value: 'newest', label: 'Newest' },
   { value: 'name', label: 'Name' },
@@ -57,7 +59,7 @@ export function ItemList({ title, items, containers, query, limit, empty, action
     const q = query.trim().toLowerCase();
     const matches = items.filter(
       (i) =>
-        (category === ALL || i.category === category) &&
+        (category === ALL || catValue(i.category) === category) &&
         (!q || `${i.name} ${i.category} ${i.vendor ?? ''} ${containerName(i.containerId) ?? ''}`.toLowerCase().includes(q)),
     );
     const sorted = sortItems(matches, sort);
@@ -94,7 +96,7 @@ export function ItemList({ title, items, containers, query, limit, empty, action
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value={ALL}>All categories</SelectItem>
-                {categories.map((c) => <SelectItem key={c} value={c}>{prettyCategory(c)}</SelectItem>)}
+                {categories.map((c) => <SelectItem key={c} value={catValue(c)}>{prettyCategory(c)}</SelectItem>)}
               </SelectContent>
             </Select>
             <Select value={sort} onValueChange={(v) => setSort((v ?? 'newest') as SortKey)}>
