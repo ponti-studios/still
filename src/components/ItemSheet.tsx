@@ -1,11 +1,14 @@
 import { useState, type FormEvent } from 'react';
 import { Check } from 'lucide-react';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue, TextField } from '@ponti-studios/ui/forms';
+import { Button } from '@ponti-studios/ui/primitives';
 import { Sheet } from './Sheet';
 import { plural } from '../format';
 import { DEFAULT_CURRENCY } from '../types';
 import type { Group, Item, ItemInput, Status } from '../types';
 
 const STATUSES: Status[] = ['Wanted', 'Planned', 'Ordered', 'Owned'];
+const NO_CONTAINER = 'none';
 
 export function ItemSheet({ item, defaults, containers, collections, categories, onSave, onClose }: {
   item?: Item;
@@ -22,7 +25,7 @@ export function ItemSheet({ item, defaults, containers, collections, categories,
   const [category, setCategory] = useState(start.category ?? '');
   const [value, setValue] = useState(start.value ? String(start.value) : '');
   const [vendor, setVendor] = useState(start.vendor ?? '');
-  const [containerId, setContainerId] = useState(start.containerId ?? '');
+  const [containerId, setContainerId] = useState(start.containerId ?? NO_CONTAINER);
   const currency = start.currency ?? DEFAULT_CURRENCY;
   const [collectionIds, setCollectionIds] = useState<string[]>(start.collectionIds ?? []);
 
@@ -37,7 +40,7 @@ export function ItemSheet({ item, defaults, containers, collections, categories,
       value: Number.isFinite(parsed) && parsed > 0 ? parsed : 0,
       currency,
       vendor: vendor.trim() || undefined,
-      containerId: containerId || undefined,
+      containerId: containerId === NO_CONTAINER ? undefined : containerId,
       collectionIds,
     });
     onClose();
@@ -46,67 +49,60 @@ export function ItemSheet({ item, defaults, containers, collections, categories,
   const choices: Status[] = STATUSES.includes(status) ? STATUSES : [...STATUSES, status];
 
   return (
-    <Sheet title={item ? 'Edit item' : 'Add to your space'} eyebrow={item ? undefined : 'A NEW THING'} onClose={onClose}>
-      <form className="form" onSubmit={submit}>
-        <label className="field">
-          <span>What is it called?</span>
-          <input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. A good reading lamp" />
-        </label>
+    <Sheet title={item ? 'Edit item' : 'Add to your space'} eyebrow={item ? undefined : 'A new thing'} onClose={onClose}>
+      <form className="flex flex-col gap-4" onSubmit={submit}>
+        <TextField label="What is it called?" autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. A good reading lamp" />
 
-        <div className="field">
-          <span>Where does it sit in your journey?</span>
-          <div className="chips" role="group" aria-label="Status">
+        <div className="flex flex-col gap-1.5">
+          <span className="text-sm font-medium">Where does it sit in your journey?</span>
+          <div className="flex flex-wrap gap-2" role="group" aria-label="Status">
             {choices.map((s) => (
-              <button type="button" key={s} className={status === s ? 'chip chosen' : 'chip'} aria-pressed={status === s} onClick={() => setStatus(s)}>
-                {status === s && <Check size={14} />} {s}
-              </button>
+              <Button type="button" size="sm" key={s} variant={status === s ? 'default' : 'outline'} aria-pressed={status === s} onClick={() => setStatus(s)}>
+                {status === s && <Check />} {s}
+              </Button>
             ))}
           </div>
         </div>
 
-        <div className="field-row">
-          <label className="field">
-            <span>Category</span>
-            <input list="categories" value={category} onChange={(e) => setCategory(e.target.value)} placeholder="Kitchen" />
+        <div className="grid grid-cols-2 gap-3">
+          <div className="flex flex-col gap-1.5">
+            <TextField label="Category" list="categories" value={category} onChange={(e) => setCategory(e.target.value)} placeholder="Kitchen" />
             <datalist id="categories">{categories.map((c) => <option key={c} value={c} />)}</datalist>
-          </label>
-          <label className="field">
-            <span>Value ({currency})</span>
-            <input inputMode="decimal" value={value} onChange={(e) => setValue(e.target.value)} placeholder="0" />
-          </label>
+          </div>
+          <TextField label={`Value (${currency})`} inputMode="decimal" value={value} onChange={(e) => setValue(e.target.value)} placeholder="0" />
         </div>
 
-        <label className="field">
-          <span>Vendor <em>(optional)</em></span>
-          <input value={vendor} onChange={(e) => setVendor(e.target.value)} placeholder="Where it comes from" />
-        </label>
+        <TextField label="Vendor (optional)" value={vendor} onChange={(e) => setVendor(e.target.value)} placeholder="Where it comes from" />
 
         {containers.length > 0 && (
-          <label className="field">
-            <span>Container</span>
-            <select value={containerId} onChange={(e) => setContainerId(e.target.value)}>
-              <option value="">No container yet</option>
-              {containers.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </select>
-          </label>
+          <div className="flex flex-col gap-1.5">
+            <span className="text-sm font-medium">Container</span>
+            <Select value={containerId} onValueChange={(v) => setContainerId(v ?? NO_CONTAINER)}>
+              <SelectTrigger className="w-full" aria-label="Container"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value={NO_CONTAINER}>No container yet</SelectItem>
+                {containers.map((c) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
         )}
 
         {collections.length > 0 && (
-          <div className="field">
-            <span>Collections</span>
-            <div className="chips">
+          <div className="flex flex-col gap-1.5">
+            <span className="text-sm font-medium">Collections</span>
+            <div className="flex flex-wrap gap-2">
               {collections.map((c) => (
-                <button type="button" key={c.id} className={collectionIds.includes(c.id) ? 'chip chosen' : 'chip'} aria-pressed={collectionIds.includes(c.id)} onClick={() => toggle(c.id)}>
-                  {collectionIds.includes(c.id) && <Check size={14} />} {c.name}
-                </button>
+                <Button type="button" size="sm" key={c.id} variant={collectionIds.includes(c.id) ? 'default' : 'outline'} aria-pressed={collectionIds.includes(c.id)} onClick={() => toggle(c.id)}>
+                  {collectionIds.includes(c.id) && <Check />} {c.name}
+                </Button>
               ))}
             </div>
           </div>
         )}
 
-        <div className="form-foot">
-          <span>{collectionIds.length > 0 ? plural(collectionIds.length, 'collection') : 'One item, for its whole lifecycle.'}</span>
-          <button className="primary" type="submit" disabled={!name.trim()}>{item ? 'Save changes' : 'Add item'}</button>
+        <div className="flex items-center justify-between gap-3">
+          <span className="text-muted-foreground text-xs">{collectionIds.length > 0 ? plural(collectionIds.length, 'collection') : 'One item, for its whole lifecycle.'}</span>
+          <Button type="submit" disabled={!name.trim()}>{item ? 'Save changes' : 'Add item'}</Button>
         </div>
       </form>
     </Sheet>
