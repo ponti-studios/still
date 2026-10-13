@@ -7,6 +7,8 @@ into an archived outcome.
 A React Native app with a Swift core (`StillCore`). Sign-in is an email code through the shared
 `HominemAuth` package (same mechanism as Thames); the session stays in the Keychain.
 
+`HominemAuth` is public and MIT-licensed ([charlesponti/HominemAuth](https://github.com/charlesponti/HominemAuth)).
+
 ## Run locally
 
 Requires Xcode, Node 24, and CocoaPods.
