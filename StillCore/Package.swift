@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
   name: "StillCore",
-  platforms: [.iOS(.v15)],
+  platforms: [.iOS(.v15), .macOS(.v12)],
   products: [.library(name: "StillCore", targets: ["StillCore"])],
   dependencies: [
     // The Hominem sign-in client (email code, Keychain session), shared with Thames.
