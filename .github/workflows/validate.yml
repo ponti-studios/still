@@ -9,11 +9,9 @@ permissions:
   contents: read
 
 jobs:
-  validate:
+  js:
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    env:
-      VITE_PUBLIC_API_URL: https://api.ponti.io
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-node@v7.0.0
@@ -21,6 +19,13 @@ jobs:
           node-version: '24.18.0'
           cache: npm
       - run: npm ci
-      - run: npx tsc -b
+      - run: npx tsc --noEmit
       - run: npm test
-      - run: npm run build
+
+  swift:
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - run: swift test
+        working-directory: StillCore

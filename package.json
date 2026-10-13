@@ -1,35 +1,37 @@
 {
-  "name": "possessions-lifecycle",
+  "name": "Still",
+  "version": "0.0.1",
   "private": true,
-  "version": "0.1.0",
-  "type": "module",
   "scripts": {
-    "dev": "vite --host 127.0.0.1",
-    "dev:app": "vite --host 127.0.0.1",
-    "build": "tsc -b && vite build",
-    "preview": "vite preview --host 127.0.0.1",
-    "dev:lvh": "portless",
-    "test": "vitest run"
+    "ios": "react-native run-ios --port ${STILL_METRO_PORT:-8084} --extra-params STILL_METRO_PORT=${STILL_METRO_PORT:-8084}",
+    "start": "RCT_METRO_PORT=${STILL_METRO_PORT:-8084} react-native start --port ${STILL_METRO_PORT:-8084}",
+    "test": "jest"
   },
   "dependencies": {
-    "@ponti-studios/ui": "^1.8.0",
-    "@tailwindcss/vite": "^4.3.3",
-    "@vitejs/plugin-react": "latest",
-    "lucide-react": "^1.49.0",
-    "react": "latest",
-    "react-dom": "latest",
-    "tailwindcss": "^4.3.3",
-    "typescript": "latest",
-    "vite": "latest"
+    "react": "19.2.3",
+    "react-native": "0.87.1",
+    "react-native-safe-area-context": "^5.5.2",
+    "zod": "^4.6.5"
   },
   "devDependencies": {
-    "@types/react": "^19.3.0",
-    "@types/react-dom": "^19.3.0",
-    "portless": "^0.15.6",
-    "vitest": "^5.0.2"
+    "@babel/core": "^7.25.2",
+    "@babel/plugin-transform-export-namespace-from": "^7.25.4",
+    "@babel/preset-env": "^7.25.3",
+    "@babel/runtime": "^7.25.0",
+    "@react-native-community/cli": "20.2.0",
+    "@react-native-community/cli-platform-ios": "20.2.0",
+    "@react-native/babel-preset": "0.87.1",
+    "@react-native/jest-preset": "0.87.1",
+    "@react-native/metro-config": "0.87.1",
+    "@react-native/typescript-config": "0.87.1",
+    "@types/jest": "^29.5.13",
+    "@types/react": "^19.2.0",
+    "@types/react-test-renderer": "^19.3.0",
+    "jest": "^29.6.3",
+    "react-test-renderer": "^19.2.3",
+    "typescript": "^6.0.3"
   },
-  "portless": {
-    "name": "still",
-    "script": "dev:app"
+  "engines": {
+    "node": ">= 22.11.0"
   }
 }
