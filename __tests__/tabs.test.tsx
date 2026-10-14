@@ -53,17 +53,19 @@ function leaves(node: JsonNode, into: string[] = []): string[] {
   }
   return into;
 }
-function render(): ReactTestRenderer.ReactTestRenderer | undefined {
+async function render(): Promise<ReactTestRenderer.ReactTestRenderer | undefined> {
   let renderer: ReactTestRenderer.ReactTestRenderer | undefined;
-  ReactTestRenderer.act(() => {
+  // Async act: Main reads a preference on mount, and its promise must settle
+  // inside act or the re-render lands after teardown.
+  await ReactTestRenderer.act(async () => {
     renderer = ReactTestRenderer.create(<Main email="cj@ponti.io" onSignOut={() => undefined} />);
   });
   return renderer;
 }
-function sceneText(route: { key: string; title: string }) {
+async function sceneText(route: { key: string; title: string }) {
   const el = tabProps.renderScene({ route, jumpTo: () => undefined }) as React.ReactElement;
   let renderer: ReactTestRenderer.ReactTestRenderer | undefined;
-  ReactTestRenderer.act(() => {
+  await ReactTestRenderer.act(async () => {
     renderer = ReactTestRenderer.create(el);
   });
   return leaves(renderer?.toJSON() as JsonNode).join(' ');
@@ -75,8 +77,8 @@ describe('native tabs', () => {
     tabProps = undefined;
   });
 
-  it('registers five tabs with glass behavior', () => {
-    render();
+  it('registers five tabs with glass behavior', async () => {
+    await render();
     expect(tabProps.navigationState.routes).toEqual([
       { key: 'overview', title: 'Overview' },
       { key: 'possessions', title: 'Possessions' },
@@ -89,8 +91,8 @@ describe('native tabs', () => {
     expect(tabProps.hapticFeedbackEnabled).toBe(true);
   });
 
-  it('uses SF Symbols that fill when focused', () => {
-    render();
+  it('uses SF Symbols that fill when focused', async () => {
+    await render();
     const icon = (key: string, focused: boolean) => tabProps.getIcon({ route: { key }, focused });
     expect(icon('overview', false)).toEqual({ sfSymbol: 'house' });
     expect(icon('overview', true)).toEqual({ sfSymbol: 'house.fill' });
@@ -100,28 +102,28 @@ describe('native tabs', () => {
     expect(icon('more', false)).toEqual({ sfSymbol: 'ellipsis' });
   });
 
-  it('badges the orders tab with the in-flight count', () => {
-    render();
+  it('badges the orders tab with the in-flight count', async () => {
+    await render();
     expect(tabProps.getBadge({ route: { key: 'orders' } })).toBe('1');
     expect(tabProps.getBadge({ route: { key: 'overview' } })).toBeUndefined();
     mockState = state([item({ id: '1' })]);
-    render();
+    await render();
     expect(tabProps.getBadge({ route: { key: 'orders' } })).toBeUndefined();
   });
 
-  it('renders each tab scene', () => {
-    render();
-    expect(sceneText({ key: 'overview', title: 'Overview' })).toContain('Recently added');
-    expect(sceneText({ key: 'possessions', title: 'Possessions' })).toContain('Everything you own');
-    expect(sceneText({ key: 'shopping', title: 'Shopping' })).toContain('Things you’re considering');
-    expect(sceneText({ key: 'orders', title: 'Orders' })).toContain('On their way');
-    const more = sceneText({ key: 'more', title: 'More' });
+  it('renders each tab scene', async () => {
+    await render();
+    expect(await sceneText({ key: 'overview', title: 'Overview' })).toContain('Recently added');
+    expect(await sceneText({ key: 'possessions', title: 'Possessions' })).toContain('Everything you own');
+    expect(await sceneText({ key: 'shopping', title: 'Shopping' })).toContain('Things you’re considering');
+    expect(await sceneText({ key: 'orders', title: 'Orders' })).toContain('On their way');
+    const more = await sceneText({ key: 'more', title: 'More' });
     expect(more).toContain('Containers');
     expect(more).toContain('cj@ponti.io');
   });
 
-  it('switches tabs on index change', () => {
-    render();
+  it('switches tabs on index change', async () => {
+    await render();
     expect(tabProps.navigationState.index).toBe(0);
     ReactTestRenderer.act(() => {
       tabProps.onIndexChange(2);
