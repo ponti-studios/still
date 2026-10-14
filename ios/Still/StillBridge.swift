@@ -128,6 +128,70 @@ final class StillBridge: RCTEventEmitter {
     }
   }
 
+  /// Copies a picked photo into Still's own on-device folder. Resolves with the stored
+  /// file URI. Needs no account: photos work signed out.
+  @objc func savePhoto(
+    _ localUri: String, filename: String,
+    resolver resolve: @escaping RCTPromiseResolveBlock,
+    rejecter reject: @escaping RCTPromiseRejectBlock
+  ) {
+    do {
+      // The picker hands back a file:// URL; accept a bare path too.
+      let url: URL
+      if let parsed = URL(string: localUri), parsed.scheme != nil {
+        url = parsed
+      } else {
+        url = URL(fileURLWithPath: localUri)
+      }
+      let stored = try LocalPhotoStore().savePhoto(from: url, filename: filename)
+      resolve(stored.absoluteString)
+    } catch let problem as StillProblem {
+      reject(problem.code, problem.message, nil)
+    } catch {
+      reject(StillProblem.other.code, StillProblem.other.message, nil)
+    }
+  }
+
+  /// Removes a stored photo, best effort. Always resolves.
+  @objc func deletePhoto(
+    _ storedUri: String,
+    resolver resolve: @escaping RCTPromiseResolveBlock,
+    rejecter reject: @escaping RCTPromiseRejectBlock
+  ) {
+    if let url = URL(string: storedUri) {
+      try? LocalPhotoStore().deletePhoto(at: url)
+    }
+    resolve(NSNull())
+  }
+
+  /// Refreshes the on-device library cache from Hominem and resolves with it, API-shaped.
+  @objc func syncLibrary(
+    _ resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock
+  ) {
+    Task { @MainActor in
+      guard let account = self.account else {
+        return reject(StillProblem.signedOut.code, StillProblem.signedOut.message, nil)
+      }
+      do {
+        resolve(try await account.syncLibrary())
+      } catch let problem as StillProblem {
+        reject(problem.code, problem.message, nil)
+      } catch {
+        reject(StillProblem.other.code, StillProblem.other.message, nil)
+      }
+    }
+  }
+
+  /// The cached library without touching the network. Needs no account: before the
+  /// first sync it resolves empty lists.
+  @objc func readLibrary(
+    _ resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock
+  ) {
+    Task { @MainActor in
+      resolve(self.account?.readLibrary() ?? StillLibraryStore.emptyPayload)
+    }
+  }
+
   /// Whether the Overview nudge was dismissed. Kept in the app's defaults.
   @objc func isNudgeDismissed(
     _ resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock

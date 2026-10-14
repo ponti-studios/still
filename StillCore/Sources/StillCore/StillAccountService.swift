@@ -65,10 +65,14 @@ public enum StillProblem: Error, Equatable, Sendable {
 /// The real account service: Hominem's sign-in.
 public struct HominemAccountService: StillAccountService {
   private let auth: AuthClient
+  private let baseURL: URL
+  private let keychainService: String
 
   public init(baseURL: URL, keychainService: String = "io.ponti.still.hominem") {
     auth = AuthClient(
       configuration: AuthConfiguration(baseURL: baseURL, keychainService: keychainService))
+    self.baseURL = baseURL
+    self.keychainService = keychainService
   }
 
   /// Hominem's production API.

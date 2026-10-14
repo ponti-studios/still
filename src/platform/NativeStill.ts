@@ -18,6 +18,14 @@ type NativeStillApi = {
   signOut(): Promise<StillAccountState>;
   /** An authenticated Hominem API call. The session stays in the Keychain; body is JSON text or null. */
   api(method: string, path: string, body: string | null): Promise<unknown>;
+  /** Copies a picked photo into Still's on-device folder. Resolves with the stored file URI. */
+  savePhoto(localUri: string, filename: string): Promise<string>;
+  /** Removes a stored photo, best effort. */
+  deletePhoto(storedUri: string): Promise<null>;
+  /** Refreshes the on-device library cache from Hominem and resolves with it, API-shaped. */
+  syncLibrary(): Promise<unknown>;
+  /** The cached library without touching the network. Empty lists before the first sync. */
+  readLibrary(): Promise<unknown>;
   /** Whether the Overview nudge was dismissed. Kept in the app's defaults. */
   isNudgeDismissed(): Promise<boolean>;
   dismissNudge(): void;

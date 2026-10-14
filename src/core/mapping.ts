@@ -31,6 +31,7 @@ export const prettyCategory = (category: string) => {
 export function fromPossession(p: ApiPossession, collectionIds: string[] = []): Item {
   const category = p.category ?? 'Uncategorised';
   const vendor = typeof p.metadata.vendor === 'string' ? p.metadata.vendor : undefined;
+  const imageUrl = typeof p.metadata.imageUrl === 'string' ? p.metadata.imageUrl : undefined;
   return {
     id: p.id,
     name: p.name,
@@ -44,6 +45,7 @@ export function fromPossession(p: ApiPossession, collectionIds: string[] = []): 
     color: colorFor(category),
     ...(vendor ? { vendor } : {}),
     ...(p.containerId ? { containerId: p.containerId } : {}),
+    ...(imageUrl ? { imageUrl } : {}),
     collectionIds,
   };
 }
@@ -56,7 +58,18 @@ export function toPossessionPayload(patch: Partial<ItemInput>, existingMetadata:
   if (patch.value !== undefined) payload.priceCents = Math.round(patch.value * 100);
   if (patch.currency !== undefined) payload.currencyCode = patch.currency;
   if ('containerId' in patch) payload.containerId = patch.containerId ?? null;
-  if (patch.vendor !== undefined) payload.metadata = { ...existingMetadata, vendor: patch.vendor };
+  const metadata: Record<string, unknown> = { ...existingMetadata };
+  let touchesMetadata = false;
+  if (patch.vendor !== undefined) {
+    metadata.vendor = patch.vendor;
+    touchesMetadata = true;
+  }
+  // Present-with-value sets the photo, present-but-undefined removes it.
+  if ('imageUrl' in patch) {
+    metadata.imageUrl = patch.imageUrl ?? null;
+    touchesMetadata = true;
+  }
+  if (touchesMetadata) payload.metadata = metadata;
   if (patch.status !== undefined) {
     if (patch.status === 'Archived') payload.isArchived = true;
     else {

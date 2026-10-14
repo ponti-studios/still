@@ -18,7 +18,7 @@ export async function api<T>(method: string, path: string, body?: unknown): Prom
   }
 }
 
-function toApiError(e: unknown): ApiError {
+export function toApiError(e: unknown): ApiError {
   const code = typeof e === 'object' && e !== null && 'code' in e ? String((e as { code: unknown }).code) : '';
   const message = e instanceof Error ? e.message : 'Something went wrong';
   // Only 401 is acted on; every other failure is shown with the native message.

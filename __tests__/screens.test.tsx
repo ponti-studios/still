@@ -1,9 +1,15 @@
 import React from 'react';
+import { Image } from 'react-native';
 import ReactTestRenderer from 'react-test-renderer';
 
 jest.mock('react-native-safe-area-context', () => ({
   ...jest.requireActual('react-native-safe-area-context'),
   useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }),
+}));
+
+jest.mock('react-native-image-picker', () => ({
+  launchCamera: jest.fn(),
+  launchImageLibrary: jest.fn(),
 }));
 import { deriveStats } from '../src/core/derive';
 import type { Group, Item } from '../src/core/types';
@@ -40,11 +46,15 @@ function leaves(node: JsonNode, into: string[] = []): string[] {
 
 /** The visible copy of a screen: every text leaf joined, like a person reading it. */
 function textOf(node: React.ReactElement) {
+  return leaves(render(node)?.toJSON() as JsonNode).join(' ');
+}
+
+function render(node: React.ReactElement) {
   let renderer: ReactTestRenderer.ReactTestRenderer | undefined;
   ReactTestRenderer.act(() => {
     renderer = ReactTestRenderer.create(node);
   });
-  return leaves(renderer?.toJSON() as JsonNode).join(' ');
+  return renderer!;
 }
 
 describe('screens', () => {
@@ -56,6 +66,39 @@ describe('screens', () => {
     expect(out).toContain('Wanted');
     const empty = textOf(<ItemList title="T" items={[]} containers={[]} query="zzz" empty={<></>} actions={actions} />);
     expect(empty).toContain('T');
+  });
+
+  it('shows item photos in the list when present', () => {
+    const items = [
+      item({ id: '1', name: 'Lamp', imageUrl: 'file:///stored/x.jpg' }),
+      item({ id: '2', name: 'Chair' }),
+    ];
+    const renderer = render(
+      <ItemList title="Everything you own" items={items} containers={[]} query="" empty={<></>} actions={actions} />,
+    );
+    const images = renderer.root.findAllByType(Image);
+    expect(images).toHaveLength(1);
+    expect(images[0]?.props.source).toEqual({ uri: 'file:///stored/x.jpg' });
+  });
+
+  it('offers a photo in the item sheet', () => {
+    const fresh = textOf(
+      <ItemSheet containers={[]} collections={[]} categories={[]} onSave={() => undefined} onClose={() => undefined} />,
+    );
+    expect(fresh).toContain('Add a photo');
+    const renderer = render(
+      <ItemSheet
+        item={item({ name: 'Lamp', imageUrl: 'file:///stored/x.jpg' })}
+        containers={[]}
+        collections={[]}
+        categories={[]}
+        onSave={() => undefined}
+        onClose={() => undefined}
+      />,
+    );
+    const images = renderer.root.findAllByType(Image);
+    expect(images).toHaveLength(1);
+    expect(images[0]?.props.source).toEqual({ uri: 'file:///stored/x.jpg' });
   });
 
   it('renders overview cards, nudge and panels', () => {

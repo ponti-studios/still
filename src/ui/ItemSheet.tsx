@@ -1,7 +1,9 @@
 import { useState } from 'react';
-import { ActionSheetIOS, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActionSheetIOS, Image, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { launchCamera, launchImageLibrary } from 'react-native-image-picker';
 import { Sheet } from './Sheet';
 import { plural } from '../core/format';
+import { deleteStoredPhoto, savePhoto } from '../core/photos';
 import { DEFAULT_CURRENCY } from '../core/types';
 import type { Group, Item, ItemInput, Status } from '../core/types';
 import { colors } from './theme';
@@ -14,7 +16,7 @@ export function ItemSheet({ item, defaults, containers, collections, categories,
   containers: Group[];
   collections: Group[];
   categories: string[];
-  onSave: (input: ItemInput) => void;
+  onSave: (input: ItemInput) => void | Promise<void>;
   onClose: () => void;
 }) {
   const start = { ...defaults, ...item };
@@ -26,11 +28,15 @@ export function ItemSheet({ item, defaults, containers, collections, categories,
   const [containerId, setContainerId] = useState(start.containerId ?? '');
   const currency = start.currency ?? DEFAULT_CURRENCY;
   const [collectionIds, setCollectionIds] = useState<string[]>(start.collectionIds ?? []);
+  const [photo, setPhoto] = useState<string | null>(() => start.imageUrl ?? null);
+  const [photoGone, setPhotoGone] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [photoProblem, setPhotoProblem] = useState<string | null>(null);
 
-  const submit = () => {
-    if (!name.trim()) return;
+  const submit = async () => {
+    if (!name.trim() || saving) return;
     const parsed = Number(value);
-    onSave({
+    const input: ItemInput = {
       name: name.trim(),
       category: category.trim() || 'Uncategorised',
       status,
@@ -39,8 +45,63 @@ export function ItemSheet({ item, defaults, containers, collections, categories,
       vendor: vendor.trim() || undefined,
       containerId: containerId || undefined,
       collectionIds,
-    });
+    };
+    if (photo) {
+      input.imageUrl = photo;
+    } else if (item?.imageUrl) {
+      // Present-but-undefined removes the photo; absent leaves it alone.
+      input.imageUrl = undefined;
+    }
+    await onSave(input);
+    const old = item?.imageUrl;
+    if (old && old !== photo) await deleteStoredPhoto(old);
     onClose();
+  };
+
+  const takePhoto = async (fromCamera: boolean) => {
+    const base = { mediaType: 'photo' as const, quality: 0.8 as const, maxWidth: 1600, maxHeight: 1600 };
+    const res = fromCamera
+      ? await launchCamera({ ...base, saveToPhotos: false })
+      : await launchImageLibrary(base);
+    if (res.didCancel) return;
+    if (res.errorCode || !res.assets?.[0]?.uri) {
+      setPhotoProblem(res.errorMessage ?? 'That photo could not be used. Try another.');
+      return;
+    }
+    const asset = res.assets[0];
+    const uri = asset?.uri;
+    if (!uri) return;
+    setSaving(true);
+    setPhotoProblem(null);
+    try {
+      setPhoto(await savePhoto(uri, asset?.type ?? 'image/jpeg'));
+      setPhotoGone(false);
+    } catch (e) {
+      setPhotoProblem(e instanceof Error ? e.message : 'The photo could not be kept. Please try again.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const photoMenu = () => {
+    const options = photo
+      ? ['Take a photo', 'Choose from the library', 'Remove the photo', 'Cancel']
+      : ['Take a photo', 'Choose from the library', 'Cancel'];
+    ActionSheetIOS.showActionSheetWithOptions(
+      {
+        options,
+        cancelButtonIndex: options.length - 1,
+        destructiveButtonIndex: photo ? 2 : undefined,
+      },
+      (index) => {
+        if (index === 0) void takePhoto(true);
+        else if (index === 1) void takePhoto(false);
+        else if (photo && index === 2) {
+          setPhoto(null);
+          setPhotoGone(false);
+        }
+      },
+    );
   };
   const toggle = (id: string) => setCollectionIds((ids) => (ids.includes(id) ? ids.filter((c) => c !== id) : [...ids, id]));
   const choices: Status[] = STATUSES.includes(status) ? STATUSES : [...STATUSES, status];
@@ -63,6 +124,21 @@ export function ItemSheet({ item, defaults, containers, collections, categories,
         <View style={styles.field}>
           <Text style={styles.label}>What is it called?</Text>
           <TextInput autoFocus value={name} onChangeText={setName} placeholder="e.g. A good reading lamp" style={styles.input} returnKeyType="done" />
+        </View>
+
+        <View style={styles.field}>
+          <Text style={styles.label}>Photo <Text style={styles.optional}>(optional)</Text></Text>
+          <Pressable style={styles.photoBox} onPress={photoMenu} disabled={saving} accessibilityLabel={photo ? 'Change the photo' : 'Add a photo'}>
+            {photo && !photoGone ? (
+              <Image source={{ uri: photo }} style={styles.photo} onError={() => setPhotoGone(true)} />
+            ) : (
+              <Text style={styles.photoPlaceholder}>
+                {saving ? 'Saving…' : photoGone ? 'That photo is gone — add another' : '＋ Add a photo'}
+              </Text>
+            )}
+          </Pressable>
+          {saving ? <Text style={styles.photoNote}>Saving…</Text> : null}
+          {photoProblem ? <Text style={styles.photoError}>{photoProblem}</Text> : null}
         </View>
 
         <View style={styles.field}>
@@ -124,7 +200,7 @@ export function ItemSheet({ item, defaults, containers, collections, categories,
 
         <View style={styles.foot}>
           <Text style={styles.footNote}>{collectionIds.length > 0 ? plural(collectionIds.length, 'collection') : 'One item, for its whole lifecycle.'}</Text>
-          <Pressable style={[styles.primary, !name.trim() && styles.disabled]} disabled={!name.trim()} onPress={submit}>
+          <Pressable style={[styles.primary, (!name.trim() || saving) && styles.disabled]} disabled={!name.trim() || saving} onPress={() => void submit()}>
             <Text style={styles.primaryText}>{item ? 'Save changes' : 'Add item'}</Text>
           </Pressable>
         </View>
@@ -151,6 +227,14 @@ const styles = StyleSheet.create({
   },
   pickerText: { fontSize: 16, color: colors.ink },
   chevron: { fontSize: 18, color: colors.faint },
+  photoBox: {
+    minHeight: 88, borderWidth: 1, borderColor: '#dfe0d9', borderRadius: 10,
+    backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center', padding: 8,
+  },
+  photo: { width: 72, height: 72, borderRadius: 10 },
+  photoPlaceholder: { fontSize: 15, fontWeight: '600', color: colors.green },
+  photoNote: { fontSize: 12, color: colors.muted },
+  photoError: { fontSize: 12, color: colors.danger },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   chip: {
     minHeight: 44, paddingHorizontal: 16, justifyContent: 'center',

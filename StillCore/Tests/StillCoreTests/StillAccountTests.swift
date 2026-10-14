@@ -184,6 +184,7 @@ struct ApiTests {
     } catch {}
     #expect(account.state.email == "cj@ponti.io")
   }
+
 }
 
 @Suite("AnyEncodable")

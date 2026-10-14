@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api, ApiError } from './api';
-import type { ApiCollection, ApiCollectionDetail, ApiContainer, ApiPossession } from './apiTypes';
+import type { ApiPossession } from './apiTypes';
+import { type LibraryPayload, readLibrary, syncLibrary } from './library';
 import { fromContainer, fromPossession, toPossessionPayload } from './mapping';
+import { deleteStoredPhoto } from './photos';
 import { STATUS_PATH, type Group, type GroupKind, type Item, type ItemInput } from './types';
 
 type State = { phase: 'loading' | 'ready' | 'error'; items: Item[]; containers: Group[]; collections: Group[]; error?: string };
@@ -12,25 +14,24 @@ const errorText = (e: unknown) => (e instanceof Error ? e.message : 'Something w
 const signedOut = (e: unknown) => e instanceof ApiError && e.status === 401;
 
 async function fetchAll(): Promise<Pick<State, 'items' | 'containers' | 'collections'>> {
-  const [possessions, containers, collections] = await Promise.all([
-    api<{ possessions: ApiPossession[] }>('GET', '/possessions?limit=5000'),
-    api<{ containers: ApiContainer[] }>('GET', '/possessions/containers'),
-    api<{ collections: ApiCollection[] }>('GET', '/collections?limit=50'),
-  ]);
-  // Which collections each possession belongs to lives on the collections, so read each one.
-  const membership = new Map<string, string[]>();
-  await Promise.all(
-    collections.collections.map(async (c) => {
-      const detail = await api<ApiCollectionDetail>('GET', `/collections/${c.id}`);
-      for (const item of detail.items) {
-        if (item.entityType === 'possessions') membership.set(item.entityId, [...(membership.get(item.entityId) ?? []), c.id]);
-      }
-    }),
-  );
+  let lib: LibraryPayload;
+  try {
+    lib = await syncLibrary();
+  } catch (e) {
+    if (signedOut(e)) throw e;
+    // Offline (or Hominem unreachable): browse what the cache holds. When the
+    // cache cannot help, the sync failure is still the story.
+    try {
+      lib = await readLibrary();
+    } catch {
+      throw e;
+    }
+    if (!lib.possessions.length && !lib.containers.length && !lib.collections.length) throw e;
+  }
   return {
-    items: possessions.possessions.map((p) => fromPossession(p, membership.get(p.id))),
-    containers: containers.containers.map((c) => fromContainer(c, containers.containers)),
-    collections: collections.collections.map((c) => ({ id: c.id, name: c.name, icon: '✦', description: c.description ?? '' })),
+    items: lib.possessions.map((p) => fromPossession(p, lib.membership[p.id])),
+    containers: lib.containers.map((c) => fromContainer(c, lib.containers)),
+    collections: lib.collections.map((c) => ({ id: c.id, name: c.name, icon: '✦', description: c.description ?? '' })),
   };
 }
 
@@ -48,11 +49,13 @@ export function useStore() {
   }, []);
   useEffect(() => { void load(); }, [load]);
 
-  // Optimistic: update the screen now, send the change, and reload from the server if it fails.
+  // Optimistic: update the screen now, send the change, then refresh the cache from
+  // Hominem (write-through). A failed change reloads, which rolls the screen back.
   const run = async (optimistic: (s: State) => State, request: () => Promise<unknown>) => {
     setState(optimistic);
     try {
       await request();
+      await load();
     } catch (e) {
       if (signedOut(e)) return;
       setNotice(`${errorText(e)} — your last change was not saved.`);
@@ -78,7 +81,7 @@ export function useStore() {
       try {
         const { possession } = await api<{ possession: ApiPossession }>('POST', '/possessions', toPossessionPayload(input));
         await syncCollections(possession.id, [], input.collectionIds);
-        setState((s) => ({ ...s, items: [fromPossession(possession, input.collectionIds), ...s.items] }));
+        await load();
       } catch (e) {
         if (signedOut(e)) return;
         setNotice(`${errorText(e)} — the item was not added.`);
@@ -93,8 +96,14 @@ export function useStore() {
         if (patch.collectionIds) await syncCollections(id, current.collectionIds, patch.collectionIds);
       });
     },
-    deleteItem: (id: string) =>
-      run((s) => ({ ...s, items: s.items.filter((i) => i.id !== id) }), () => api('DELETE', `/possessions/${id}`)),
+    deleteItem: (id: string) => {
+      const victim = state.items.find((i) => i.id === id);
+      return run((s) => ({ ...s, items: s.items.filter((i) => i.id !== id) }), async () => {
+        await api('DELETE', `/possessions/${id}`);
+        // Best effort: a surviving file is just an orphan, never user-visible.
+        if (victim?.imageUrl) await deleteStoredPhoto(victim.imageUrl);
+      });
+    },
     advance(id: string) {
       const item = state.items.find((i) => i.id === id);
       if (!item || item.status === 'Archived') return Promise.resolve();
@@ -105,12 +114,11 @@ export function useStore() {
     async addGroup(kind: GroupKind, data: Pick<Group, 'name' | 'description'>) {
       try {
         if (kind === 'container') {
-          const { container } = await api<{ container: ApiContainer }>('POST', '/possessions/containers', data);
-          setState((s) => ({ ...s, containers: [...s.containers, fromContainer(container, [container])] }));
+          await api('POST', '/possessions/containers', data);
         } else {
-          const { collection } = await api<{ collection: ApiCollection }>('POST', '/collections', data);
-          setState((s) => ({ ...s, collections: [{ id: collection.id, name: collection.name, icon: '✦', description: collection.description ?? '' }, ...s.collections] }));
+          await api('POST', '/collections', data);
         }
+        await load();
       } catch (e) {
         if (signedOut(e)) return;
         setNotice(`${errorText(e)} — the ${kind} was not created.`);

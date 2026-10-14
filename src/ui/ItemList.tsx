@@ -1,5 +1,5 @@
 import { memo, useMemo, useState, type ReactNode } from 'react';
-import { ActionSheetIOS, FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActionSheetIOS, FlatList, Image, Pressable, StyleSheet, Text, View } from 'react-native';
 import type { SortKey } from '../core/derive';
 import { money, plural, shortDate } from '../core/format';
 import { filterItems } from '../core/list';
@@ -90,6 +90,19 @@ export function ItemList({ title, items, containers, query, limit, empty, action
   );
 }
 
+/** The item's photo, or its emoji when there is none — or the file went missing. */
+function Thumb({ item }: { item: Item }) {
+  const [gone, setGone] = useState(false);
+  if (!item.imageUrl || gone) {
+    return (
+      <View style={[styles.thumb, { backgroundColor: thumbColors[item.color] ?? '#f4ecdc' }]}>
+        <Text style={styles.thumbText}>{item.icon}</Text>
+      </View>
+    );
+  }
+  return <Image source={{ uri: item.imageUrl }} style={styles.thumbImg} onError={() => setGone(true)} />;
+}
+
 const Row = memo(function Row({ item, containers, actions }: { item: Item; containers: Group[]; actions: ItemActions }) {
   const where = containers.find((c) => c.id === item.containerId)?.name ?? item.vendor;
   const archived = item.status === 'Archived';
@@ -111,9 +124,7 @@ const Row = memo(function Row({ item, containers, actions }: { item: Item; conta
     <View style={styles.row}>
       <View style={styles.top}>
         <View style={styles.main}>
-          <View style={[styles.thumb, { backgroundColor: thumbColors[item.color] ?? '#f4ecdc' }]}>
-            <Text style={styles.thumbText}>{item.icon}</Text>
-          </View>
+          <Thumb item={item} />
           <View style={styles.names}>
             <Text style={styles.name} numberOfLines={1}>{item.name}</Text>
             <Text style={styles.meta} numberOfLines={1}>
@@ -166,6 +177,7 @@ const styles = StyleSheet.create({
   main: { flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1, minWidth: 0 },
   thumb: { width: 44, height: 44, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
   thumbText: { fontSize: 22 },
+  thumbImg: { width: 44, height: 44, borderRadius: 11 },
   names: { flex: 1, gap: 2, minWidth: 0 },
   name: { fontSize: 15, fontWeight: '600', color: colors.ink },
   meta: { fontSize: 12, color: colors.muted },

@@ -42,9 +42,11 @@ public struct StillAccountState: Equatable, Sendable {
 public final class StillAccount: ObservableObject {
   @Published public private(set) var state = StillAccountState()
   private let service: StillAccountService
+  private let library: StillLibraryStore
 
-  public init(service: StillAccountService) {
+  public init(service: StillAccountService, library: StillLibraryStore = StillLibraryStore()) {
     self.service = service
+    self.library = library
   }
 
   /// Looks up the saved session. Signed out is an answer; a failed lookup is not, so its reason
@@ -132,6 +134,7 @@ public final class StillAccount: ObservableObject {
 
   public func signOut() async {
     await service.signOut()
+    library.clear()
     update {
       $0.email = nil
       $0.step = .idle
@@ -143,8 +146,24 @@ public final class StillAccount: ObservableObject {
   /// An authenticated Hominem API call for the screens. Throws `StillProblem`. A session that
   /// has run out clears the email, so the screens flip to sign-in on the state change.
   public func api(method: String, path: String, body: String?) async throws -> Data {
+    try await guardingSession { try await service.request(method: method, path: path, body: body) }
+  }
+
+  /// Refreshes the on-device library cache from Hominem and returns it, API-shaped.
+  /// Throws `StillProblem`, with the same session handling as `api`.
+  public func syncLibrary() async throws -> [String: Any] {
+    try await guardingSession { try await LibrarySync(service: service, store: library).sync() }
+  }
+
+  /// The cached library, API-shaped, without touching the network. Empty lists when
+  /// nothing is cached yet.
+  public func readLibrary() -> [String: Any] {
+    library.readPayload()
+  }
+
+  private func guardingSession<T>(_ work: () async throws -> T) async throws -> T {
     do {
-      return try await service.request(method: method, path: path, body: body)
+      return try await work()
     } catch {
       if Self.problem(error) == .signedOut {
         update {

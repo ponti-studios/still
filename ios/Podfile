@@ -41,5 +41,21 @@ target 'Still' do
         end
       end
     end
+
+    # react-native-bottom-tabs quotes RCTConversions.h, which only exists inside the prebuilt
+    # React xcframework — not in the flattened pod headers — so expose that Headers dir to it.
+    # The headers are identical across slices; one slice path compiles every platform.
+    prebuilt_headers = 'React-Core-prebuilt/React.xcframework/ios-arm64_x86_64-simulator/React.framework/Headers'
+    if File.directory?(File.join(installer.sandbox.root.to_s, prebuilt_headers))
+      installer.pods_project.targets.each do |target|
+        next unless target.name == 'react-native-bottom-tabs'
+        target.build_configurations.each do |build_config|
+          search_paths = build_config.build_settings['HEADER_SEARCH_PATHS'] || '$(inherited)'
+          search_paths = [search_paths] unless search_paths.is_a?(Array)
+          search_paths << %("${PODS_ROOT}/#{prebuilt_headers}")
+          build_config.build_settings['HEADER_SEARCH_PATHS'] = search_paths
+        end
+      end
+    end
   end
 end

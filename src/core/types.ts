@@ -16,12 +16,13 @@ export type Item = {
   vendor?: string;
   containerId?: string;
   collectionIds: string[];
+  imageUrl?: string;
 };
 
 // Containers (where a thing physically sits) and collections (how you group things) share a shape.
 export type Group = { id: string; name: string; icon: string; description: string; parentId?: string };
 
-export type ItemInput = Pick<Item, 'name' | 'category' | 'status' | 'value' | 'currency' | 'vendor' | 'containerId' | 'collectionIds'>;
+export type ItemInput = Pick<Item, 'name' | 'category' | 'status' | 'value' | 'currency' | 'vendor' | 'containerId' | 'collectionIds' | 'imageUrl'>;
 
 export const STATUS_PATH: Status[] = ['Wanted', 'Planned', 'Ordered', 'Delivered', 'Owned'];
 export const SHOPPING: Status[] = ['Wanted', 'Planned', 'Ordered'];
