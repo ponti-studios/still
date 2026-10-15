@@ -6,8 +6,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/charlesponti/HominemAuth.git",
       "state" : {
-        "revision" : "4180930b8a65eeceb285c51e4c2cf583e8448973",
-        "version" : "0.1.0"
+        "revision" : "a88d00d42cdbbf3400751f52b07bca14288372ea",
+        "version" : "0.2.0"
       }
     }
   ],
