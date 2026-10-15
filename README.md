@@ -42,9 +42,13 @@ LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 scripts/archive-testflight.sh --upload
 
 ## Data
 
-Still stores everything in Hominem's Postgres, through the Hominem API (`/api/possessions`,
-`/api/possessions/containers`, `/api/collections`), scoped to the signed-in user. Nothing is kept
-on the phone except the Keychain session and small view preferences.
+Still stores record truth in Hominem's Postgres, through the Hominem API (`/api/possessions`,
+`/api/possessions/containers`, `/api/collections`), scoped to the signed-in user.
+
+On the phone: the Keychain session, small view preferences, a Core Data library cache
+(`Application Support/Still/StillLibrary.sqlite` — Hominem stays the source of truth, the cache
+is wipe-and-filled on sync and serves airplane-mode browse), and item photos
+(`Application Support/Still/Photos` — on-device files, file URI in metadata, never uploaded).
 
 To load the spreadsheet inventory once, export the "master" and "containers" tabs of the
 possessions sheet, and optionally the shopping sheet, as CSV (`master.csv`, `containers.csv`,
