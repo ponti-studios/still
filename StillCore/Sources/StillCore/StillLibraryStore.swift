@@ -17,6 +17,22 @@ public final class CachedPossession: NSManagedObject {
   @NSManaged public var containerId: String?
   @NSManaged public var metadata: String
   @NSManaged public var createdAt: String
+  // still-library-2 additions. Artist, daily cost, amount and provenance ride
+  // in `metadata` until the stage-2 model convergence gives them columns.
+  @NSManaged public var brand: String?
+  @NSManaged public var model: String?
+  @NSManaged public var subCategory: String?
+  @NSManaged public var url: String?
+  @NSManaged public var notes: String?
+  @NSManaged public var serialNumber: String?
+  @NSManaged public var size: String?
+  @NSManaged public var color: String?
+  @NSManaged public var placement: String?
+  @NSManaged public var categoryId: String?
+  @NSManaged public var retiredDate: String?
+  @NSManaged public var sellPriceCents: Int64
+  @NSManaged public var updatedAt: String?
+  @NSManaged public var deletedAt: String?
 }
 
 @objc(CachedContainer)
@@ -27,6 +43,8 @@ public final class CachedContainer: NSManagedObject {
   @NSManaged public var parentContainerId: String?
   @NSManaged public var desc: String?
   @NSManaged public var metadata: String
+  @NSManaged public var updatedAt: String?
+  @NSManaged public var deletedAt: String?
 }
 
 @objc(CachedCollection)
@@ -34,6 +52,8 @@ public final class CachedCollection: NSManagedObject {
   @NSManaged public var id: String
   @NSManaged public var name: String
   @NSManaged public var desc: String?
+  @NSManaged public var updatedAt: String?
+  @NSManaged public var deletedAt: String?
 }
 
 @objc(CachedMembership)
@@ -42,7 +62,29 @@ public final class CachedMembership: NSManagedObject {
   @NSManaged public var entityId: String
 }
 
-enum StillLibraryModel {
+/// Managed categories (stage-2 convergence fills these; empty until then).
+@objc(CachedCategory)
+public final class CachedCategory: NSManagedObject {
+  @NSManaged public var id: String
+  @NSManaged public var name: String
+}
+
+/// Ordered photo manifest. Bytes live in iCloud; Hominem carries this index.
+/// `sha256` (not `hash`: `NSObject.hash` collides) names the immutable file.
+@objc(CachedImageAsset)
+public final class CachedImageAsset: NSManagedObject {
+  @NSManaged public var id: String
+  @NSManaged public var possessionId: String
+  @NSManaged public var sha256: String?
+  @NSManaged public var filename: String?
+  @NSManaged public var displayOrder: Int64
+  @NSManaged public var altText: String?
+  @NSManaged public var originalFilename: String?
+}
+
+/// The shipped v1 model, frozen. Do not edit: the migrator diffs real user
+/// stores against exactly this shape, and `StillLibraryModelTests` enforces it.
+enum StillLibraryModelV1 {
   static func make() -> NSManagedObjectModel {
     func attribute(
       _ name: String, _ type: NSAttributeType, optional: Bool = true, defaultValue: Any? = nil
@@ -102,6 +144,102 @@ enum StillLibraryModel {
   }
 }
 
+/// The stage-2 shared model: v1 plus rich possession fields, sync bookkeeping
+/// (`updatedAt`/`deletedAt` tombstones on every collection-side entity),
+/// managed categories, and the photo manifest. Every change from v1 is
+/// additive (new optional attributes with defaults, new entities), so the
+/// migrator infers the mapping.
+enum StillLibraryModelV2 {
+  static func make() -> NSManagedObjectModel {
+    func attribute(
+      _ name: String, _ type: NSAttributeType, optional: Bool = true, defaultValue: Any? = nil
+    ) -> NSAttributeDescription {
+      let attribute = NSAttributeDescription()
+      attribute.name = name
+      attribute.attributeType = type
+      attribute.isOptional = optional
+      attribute.defaultValue = defaultValue
+      return attribute
+    }
+    func entity(_ name: String, class: AnyClass, _ attributes: NSAttributeDescription...) -> NSEntityDescription {
+      let entity = NSEntityDescription()
+      entity.name = name
+      entity.managedObjectClassName = NSStringFromClass(`class`)
+      entity.properties = attributes
+      return entity
+    }
+    let string = NSAttributeType.stringAttributeType
+    let int = NSAttributeType.integer64AttributeType
+    let bool = NSAttributeType.booleanAttributeType
+    let model = NSManagedObjectModel()
+    model.entities = [
+      entity(
+        "CachedPossession", class: CachedPossession.self,
+        attribute("id", string, optional: false),
+        attribute("name", string, optional: false),
+        attribute("category", string),
+        attribute("status", string),
+        attribute("isArchived", bool, optional: false, defaultValue: false),
+        attribute("acquiredDate", string),
+        attribute("priceCents", int, optional: false, defaultValue: 0),
+        attribute("currencyCode", string),
+        attribute("containerId", string),
+        attribute("metadata", string, optional: false, defaultValue: "{}"),
+        attribute("createdAt", string, optional: false, defaultValue: ""),
+        attribute("brand", string),
+        attribute("model", string),
+        attribute("subCategory", string),
+        attribute("url", string),
+        attribute("notes", string),
+        attribute("serialNumber", string),
+        attribute("size", string),
+        attribute("color", string),
+        attribute("placement", string),
+        attribute("categoryId", string),
+        attribute("retiredDate", string),
+        attribute("sellPriceCents", int, optional: false, defaultValue: 0),
+        attribute("updatedAt", string),
+        attribute("deletedAt", string)),
+      entity(
+        "CachedContainer", class: CachedContainer.self,
+        attribute("id", string, optional: false),
+        attribute("name", string, optional: false),
+        attribute("containerType", string),
+        attribute("parentContainerId", string),
+        attribute("desc", string),
+        attribute("metadata", string, optional: false, defaultValue: "{}"),
+        attribute("updatedAt", string),
+        attribute("deletedAt", string)),
+      entity(
+        "CachedCollection", class: CachedCollection.self,
+        attribute("id", string, optional: false),
+        attribute("name", string, optional: false),
+        attribute("desc", string),
+        attribute("updatedAt", string),
+        attribute("deletedAt", string)),
+      entity(
+        "CachedMembership", class: CachedMembership.self,
+        attribute("collectionId", string, optional: false),
+        attribute("entityId", string, optional: false)),
+      entity(
+        "CachedCategory", class: CachedCategory.self,
+        attribute("id", string, optional: false),
+        attribute("name", string, optional: false)),
+      entity(
+        "CachedImageAsset", class: CachedImageAsset.self,
+        attribute("id", string, optional: false),
+        attribute("possessionId", string, optional: false),
+        attribute("sha256", string),
+        attribute("filename", string),
+        attribute("displayOrder", int, optional: false, defaultValue: 0),
+        attribute("altText", string),
+        attribute("originalFilename", string)),
+    ]
+    model.versionIdentifiers = ["still-library-2"]
+    return model
+  }
+}
+
 /// The library cache. Every access runs inside `performAndWait`, so sharing it across
 /// threads is safe; the model is versioned for the stage-2 Mac sharing.
 public final class StillLibraryStore: @unchecked Sendable {
@@ -132,8 +270,9 @@ public final class StillLibraryStore: @unchecked Sendable {
   }
 
   private static func makeContainer(inMemory: Bool, storeURL: URL?) -> NSPersistentContainer? {
+    // v1 until the step-3 migrator moves existing stores to v2.
     let container = NSPersistentContainer(
-      name: "StillLibrary", managedObjectModel: StillLibraryModel.make())
+      name: "StillLibrary", managedObjectModel: StillLibraryModelV1.make())
     if inMemory {
       let description = NSPersistentStoreDescription()
       description.type = NSInMemoryStoreType
