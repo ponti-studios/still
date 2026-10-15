@@ -32,6 +32,11 @@ until marked Accepted.
 | 3 | Stage-1 sync model: write-through vs offline outbox | Decided | Write-through: reads serve from Core Data, writes hit Hominem first then update the cache; no offline writes |
 | 4 | Stage 1 boundary: iOS-only vs includes Possessions | Decided | Stage 1 is iOS-only (RN + Core Data cache + Hominem sync); Possessions untouched, no shared data until stage 2 |
 | 5 | Photos in stage 1 | Decided | Unchanged (follows from the iOS-only boundary): on-device files, URI in metadata, no cross-device sync |
+| 6 | Stage-2 records vs bytes | Accepted 2026-10-15 | Hominem stays the source of truth for records; Apple hosts photo bytes in the shared `iCloud.io.ponti.still` container (CloudDocuments + CloudKit), Hominem carries only the ordered photo manifest |
+| 7 | Stage-2 sync model | Accepted 2026-10-15 | True offline editing: client outbox with idempotent ops, delta pull (`?since=`) with tombstones, last-write-wins with documented rejections; RN and Swift share the same op lifecycle |
+| 8 | Stage-2 model convergence | Accepted 2026-10-15 | Still lifecycle wins (`Wanted→Planned→Ordered→Delivered→Owned` + `isArchived`); `In Use→Owned`, `Retired`/`Disposed→Archived` with reason in metadata; categories become managed records with case-insensitive uniqueness |
+| 9 | Stage-2 boundary | Accepted 2026-10-15 | Through Mac convergence (Possessions on StillCore + one-way SQLite importer); SwiftUI iOS rewrite stays deferred and out of scope |
+| 10 | Photo roaming | Accepted 2026-10-15 | Local-first files (`Still/Photos/<possession-id>/<sha256>.jpg`), Hominem manifest for order, lazy download, tombstone delete with GC; iCloud-off stays local-capable with a notice; no Hominem photo bytes, no thumbnail pipeline |
 
 ## Goals
 
@@ -75,3 +80,18 @@ native rewrite, offline writes, CloudKit.
 Done means — cache fills from Hominem on launch; lists render from the
 cache; writes go through Hominem then the cache; airplane-mode browse
 works; all suites green; TestFlight build deployed.
+
+## Stage 2 scope contract (accepted 2026-10-15)
+
+In scope — Core Data v2 shared model (rich fields, ordered photo
+manifest, `categoryId`, tombstones); Hominem delta (`?since=`,
+tombstones) plus membership batch and paging; client outbox on both
+clients; status/category convergence; Possessions Mac on StillCore;
+one-way SQLite importer with backup and quarantine; shared iCloud
+photo container plus manifest sync with GC; cutover runbook.
+Out of scope — SwiftUI iOS rewrite, CloudKit record sync, Hominem
+photo bytes, thumbnail pipeline, web/Android photo roaming.
+Done means — cache fills from Hominem on launch; lists render from
+the cache; edits queue offline and converge through the outbox;
+airplane-mode browse and photo add work; photos roam iPhone to Mac;
+all suites green on both apps; staging migration rehearsed without loss.
