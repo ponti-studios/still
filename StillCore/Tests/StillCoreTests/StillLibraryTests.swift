@@ -29,10 +29,10 @@ private actor FakeLibraryService: StillAccountService {
 
 private func libraryResponses(possessions: String) -> [String: String] {
   [
-    "/api/possessions?limit=5000": #"{"possessions":\#(possessions)}"#,
+    "/api/possessions?limit=5000&offset=0": #"{"possessions":\#(possessions)}"#,
     "/api/possessions/containers": #"{"containers":[{"id":"box","name":"Box","containerType":"box","parentContainerId":null,"description":null,"metadata":{}}]}"#,
     "/api/collections?limit=50": #"{"collections":[{"id":"c1","name":"Keep","description":null}]}"#,
-    "/api/collections/c1": #"{"items":[{"entityType":"possessions","entityId":"p1"}]}"#,
+    "/api/collections/membership": #"{"membership":[{"collectionId":"c1","entityType":"possessions","entityId":"p1"}],"count":1}"#,
   ]
 }
 
@@ -59,8 +59,9 @@ private func rows(_ payload: [String: Any], _ key: String) -> [[String: Any]] {
     #expect(rows(payload, "collections").first?["name"] as? String == "Keep")
     #expect(payload["membership"] as? [String: [String]] == ["p1": ["c1"]])
     let calls = await service.takeCalls()
-    #expect(calls.contains("/api/possessions?limit=5000"))
-    #expect(calls.contains("/api/collections/c1"))
+    #expect(calls.contains("/api/possessions?limit=5000&offset=0"))
+    #expect(calls.contains("/api/collections/membership"))
+    #expect(!calls.contains(where: { $0.hasPrefix("/api/collections/c") }))
   }
 
   @Test func readServesTheCacheWithoutNetwork() async throws {
@@ -91,6 +92,32 @@ private func rows(_ payload: [String: Any], _ key: String) -> [[String: Any]] {
 
     #expect(rows(payload, "possessions").isEmpty)
     #expect(rows(store.readPayload(), "possessions").isEmpty)
+  }
+
+  @Test func syncPagesBeyondTheFirstLimit() async throws {
+    let service = FakeLibraryService()
+    var firstPageRows: [String] = []
+    for i in 0..<5000 {
+      firstPageRows.append(
+        #"{"id":"p\#(i)","name":"Thing \#(i)","category":null,"status":null,"isArchived":false,"acquiredDate":null,"priceCents":0,"currencyCode":null,"containerId":null,"metadata":{},"createdAt":"2025-01-10T00:00:00Z"}"#
+      )
+    }
+    await service.setResponses([
+      "/api/possessions?limit=5000&offset=0": #"{"possessions":[\#(firstPageRows.joined(separator: ","))]}"#,
+      "/api/possessions?limit=1000&offset=5000":
+        #"{"possessions":[{"id":"p5000","name":"Last","category":null,"status":null,"isArchived":false,"acquiredDate":null,"priceCents":0,"currencyCode":null,"containerId":null,"metadata":{},"createdAt":"2025-01-10T00:00:00Z"}]}"#,
+      "/api/possessions/containers": #"{"containers":[]}"#,
+      "/api/collections?limit=50": #"{"collections":[{"id":"c1","name":"Keep","description":null}]}"#,
+      "/api/collections/membership":
+        #"{"membership":[{"collectionId":"c1","entityType":"places","entityId":"x"},{"collectionId":"c1","entityType":"possessions","entityId":"p5000"}],"count":2}"#,
+    ])
+    let store = StillLibraryStore(inMemory: true)
+
+    let payload = try await LibrarySync(service: service, store: store).sync()
+
+    #expect(rows(payload, "possessions").count == 5001)
+    // Non-possession entity types ride the same index and are filtered out.
+    #expect(payload["membership"] as? [String: [String]] == ["p5000": ["c1"]])
   }
 
   @Test func emptyStoreReadsEmpty() {
