@@ -44,7 +44,9 @@ actor FakeAccountService: StillAccountService {
 }
 
 @MainActor
-func account(service: FakeAccountService = FakeAccountService()) -> (StillAccount, FakeAccountService) {
+func account(service: FakeAccountService = FakeAccountService()) -> (
+  StillAccount, FakeAccountService
+) {
   (StillAccount(service: service), service)
 }
 
@@ -191,7 +193,8 @@ struct ApiTests {
 struct AnyEncodableTests {
   @Test func roundTripsJsonValues() throws {
     let object = try JSONSerialization.jsonObject(
-      with: Data(#"{"name":"Lamp","priceCents":1200,"archived":false,"vendor":null,"tags":["a"]}"#.utf8))
+      with: Data(
+        #"{"name":"Lamp","priceCents":1200,"archived":false,"vendor":null,"tags":["a"]}"#.utf8))
     let data = try JSONEncoder().encode(AnyEncodable(value: object))
     let text = String(data: data, encoding: .utf8) ?? ""
     #expect(text.contains(#""name":"Lamp""#))
@@ -206,12 +209,26 @@ struct AnyEncodableTests {
 struct ProblemMappingTests {
   @Test func mapsClientErrors() {
     #expect(HominemAccountService.problem(HominemAuthError.invalidOTP(message: nil)) == .badCode)
-    #expect(HominemAccountService.problem(HominemAuthError.rateLimited(retryAfter: nil)) == .tooMany)
+    #expect(
+      HominemAccountService.problem(HominemAuthError.rateLimited(retryAfter: nil)) == .tooMany)
     #expect(HominemAccountService.problem(HominemAuthError.network(underlying: "x")) == .noService)
     #expect(HominemAccountService.problem(HominemAuthError.notAuthenticated) == .signedOut)
-    #expect(HominemAccountService.problem(HominemAuthError.server(status: 401, message: nil)) == .signedOut)
-    #expect(HominemAccountService.problem(HominemAuthError.badResponse(status: 401, message: nil)) == .signedOut)
-    #expect(HominemAccountService.problem(HominemAuthError.server(status: 500, message: nil)) == .other)
+    #expect(
+      HominemAccountService.problem(HominemAuthError.server(status: 401, message: nil))
+        == .signedOut)
+    #expect(
+      HominemAccountService.problem(HominemAuthError.badResponse(status: 401, message: nil))
+        == .signedOut)
+    #expect(
+      HominemAccountService.problem(HominemAuthError.server(status: 500, message: nil)) == .other)
+    #expect(
+      HominemAccountService.problem(HominemAuthError.server(status: 503, message: nil))
+        == .noService)
+    #expect(HominemAccountService.keepsSavedSession(HominemAuthError.network(underlying: "x")))
+    #expect(
+      HominemAccountService.keepsSavedSession(HominemAuthError.server(status: 503, message: nil)))
+    #expect(
+      !HominemAccountService.keepsSavedSession(HominemAuthError.server(status: 401, message: nil)))
     #expect(HominemAccountService.problem(StillProblem.tooMany) == .tooMany)
   }
 }

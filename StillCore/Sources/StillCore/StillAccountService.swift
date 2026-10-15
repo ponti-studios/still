@@ -79,12 +79,15 @@ public struct HominemAccountService: StillAccountService {
   public static let production = URL(string: "https://api.ponti.io")!
 
   public func signedInEmail() async throws -> String? {
-    // A session saved in the Keychain is trusted only after the server has confirmed it.
+    // A session saved in the Keychain is trusted only after the server has confirmed it. The
+    // client says "signed out" only when the server ended the session; offline or a server error
+    // throws and keeps it.
     do {
       return try await auth.getSession()?.email
     } catch {
-      // Offline at launch: the saved session is still there, so keep showing it.
-      if case .network = error as? HominemAuthError, let saved = auth.cachedUser() {
+      // Offline at launch, or the server is having a bad moment: the saved session is still
+      // there, so keep showing it.
+      if Self.keepsSavedSession(error), let saved = auth.cachedUser() {
         return saved.email
       }
       throw Self.problem(error)
@@ -117,18 +120,27 @@ public struct HominemAccountService: StillAccountService {
     } catch { throw Self.problem(error) }
   }
 
-  /// The client's errors, put into the words the screens use.
+  /// An error that says nothing about whether the session is still good (no connection, a server
+  /// problem), so the saved one stays on screen.
+  static func keepsSavedSession(_ error: Error) -> Bool {
+    switch error as? HominemAuthError {
+    case .network: return true
+    case .server(let status, _), .badResponse(let status, _): return status != 401 && status != 403
+    default: return false
+    }
+  }
+
+  /// The client's errors, put into the words the screens use. The categories come from
+  /// HominemAuth, so every app sorts them the same way.
   static func problem(_ error: Error) -> StillProblem {
     if let known = error as? StillProblem { return known }
     guard let failure = error as? HominemAuthError else { return .other }
-    switch failure {
-    case .invalidOTP: return .badCode
-    case .rateLimited: return .tooMany
-    case .network: return .noService
-    case .notAuthenticated, .missingSessionToken: return .signedOut
-    case .server(let status, _), .badResponse(let status, _):
-      return status == 401 ? .signedOut : .other
-    default: return .other
+    switch failure.problem {
+    case .badCode: return .badCode
+    case .tooManyAttempts: return .tooMany
+    case .noService: return .noService
+    case .signedOut: return .signedOut
+    case .other: return .other
     }
   }
 }
