@@ -109,10 +109,11 @@ public final class StillLibraryStore: @unchecked Sendable {
 
   /// File-backed in Application Support, falling back to in-memory when the file
   /// store cannot load: a cache must never break the app.
-  public init(inMemory: Bool = false) {
-    if let container = Self.makeContainer(inMemory: inMemory) {
+  /// `storeURL` is a test seam (a temp-dir file, usually); nil means the default location.
+  public init(inMemory: Bool = false, storeURL: URL? = nil) {
+    if let container = Self.makeContainer(inMemory: inMemory, storeURL: storeURL) {
       self.container = container
-    } else if let memory = Self.makeContainer(inMemory: true) {
+    } else if let memory = Self.makeContainer(inMemory: true, storeURL: nil) {
       container = memory
     } else {
       fatalError("Core Data unavailable")
@@ -120,7 +121,17 @@ public final class StillLibraryStore: @unchecked Sendable {
     container.viewContext.automaticallyMergesChangesFromParent = true
   }
 
-  private static func makeContainer(inMemory: Bool) -> NSPersistentContainer? {
+  private static func defaultStoreURL() -> URL? {
+    guard
+      let base = try? FileManager.default.url(
+        for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+    else { return nil }
+    let folder = base.appendingPathComponent("Still", isDirectory: true)
+    try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    return folder.appendingPathComponent("StillLibrary.sqlite")
+  }
+
+  private static func makeContainer(inMemory: Bool, storeURL: URL?) -> NSPersistentContainer? {
     let container = NSPersistentContainer(
       name: "StillLibrary", managedObjectModel: StillLibraryModel.make())
     if inMemory {
@@ -128,14 +139,17 @@ public final class StillLibraryStore: @unchecked Sendable {
       description.type = NSInMemoryStoreType
       container.persistentStoreDescriptions = [description]
     } else {
-      guard
-        let base = try? FileManager.default.url(
-          for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
-      else { return nil }
-      let folder = base.appendingPathComponent("Still", isDirectory: true)
-      try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+      let url: URL
+      if let storeURL {
+        try? FileManager.default.createDirectory(
+          at: storeURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        url = storeURL
+      } else {
+        guard let `default` = defaultStoreURL() else { return nil }
+        url = `default`
+      }
       container.persistentStoreDescriptions = [
-        NSPersistentStoreDescription(url: folder.appendingPathComponent("StillLibrary.sqlite")),
+        NSPersistentStoreDescription(url: url),
       ]
     }
     var loaded = false

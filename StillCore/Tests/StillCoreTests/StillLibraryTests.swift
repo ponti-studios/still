@@ -128,6 +128,22 @@ private func rows(_ payload: [String: Any], _ key: String) -> [[String: Any]] {
     #expect(payload["membership"] as? [String: [String]] == [:])
   }
 
+  @Test func fileBackedStoresShareTheSameFile() throws {
+    let url = FileManager.default.temporaryDirectory
+      .appendingPathComponent(UUID().uuidString)
+      .appendingPathComponent("StillLibrary.sqlite")
+    let first = StillLibraryStore(storeURL: url)
+    first.replaceAll(
+      possessions: [
+        ["id": "p1", "name": "Lamp", "metadata": ["vendor": "Ikea"], "createdAt": "2025-01-10T00:00:00Z"]
+      ],
+      containers: [], collections: [], membership: [])
+
+    let second = StillLibraryStore(storeURL: url)
+
+    #expect(rows(second.readPayload(), "possessions").first?["name"] as? String == "Lamp")
+  }
+
   @Test func malformedResponsesThrowOther() async {
     let service = FakeLibraryService()
     await service.setResponses([:])
