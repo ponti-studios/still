@@ -37,6 +37,7 @@ until marked Accepted.
 | 8 | Stage-2 model convergence | Accepted 2026-10-15 | Still lifecycle wins (`Wanted→Planned→Ordered→Delivered→Owned` + `isArchived`); `In Use→Owned`, `Retired`/`Disposed→Archived` with reason in metadata; categories become managed records with case-insensitive uniqueness |
 | 9 | Stage-2 boundary | Accepted 2026-10-15 | Through Mac convergence (Possessions on StillCore + one-way SQLite importer); SwiftUI iOS rewrite stays deferred and out of scope |
 | 10 | Photo roaming | Accepted 2026-10-15 | Local-first files (`Still/Photos/<possession-id>/<sha256>.jpg`), Hominem manifest for order, lazy download, tombstone delete with GC; iCloud-off stays local-capable with a notice; no Hominem photo bytes, no thumbnail pipeline |
+| 11 | Mac app home | Accepted 2026-10-16 | Possessions moves into the Still repo at `macos/` — one SwiftPM package renamed `Still`, beside the shared `StillCore`, so the two apps share code in one place. Its own domain target (`StillMacCore`) retires in favour of `StillCore` in task 008 |
 
 ## Goals
 
@@ -98,3 +99,9 @@ all suites green on both apps; staging migration rehearsed without loss.
 
 Decision 7 (the client outbox) is implemented in `StillCore`; the shared op
 lifecycle RN and Swift follow is written down in `docs/client-outbox.md`.
+
+The Mac app now lives in this repo at `macos/` (decision 11): a SwiftPM package
+named `Still` whose app target is `Still` and whose local domain target
+`StillMacCore` is the piece task 008 replaces with `StillCore`. Build and test it
+from `macos/` (`swift build`, `swift test`); the iOS app and `StillCore` are
+unaffected.
