@@ -1,0 +1,24 @@
+{
+  "configurations": [
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:Still}",
+      "name": "Debug Still",
+      "target": "Still",
+      "configuration": "debug",
+      "preLaunchTask": "swift: Build Debug Still"
+    },
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:Still}",
+      "name": "Release Still",
+      "target": "Still",
+      "configuration": "release",
+      "preLaunchTask": "swift: Build Release Still"
+    }
+  ]
+}
