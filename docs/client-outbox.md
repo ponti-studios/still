@@ -32,7 +32,10 @@ A queued write is a `LibraryOp`:
 | `entityId` | the client's own UUID for a create (sent as `externalId`), the server id otherwise |
 | `payload` | the API-shaped request body as JSON text |
 
-Ops are stored in the `CachedOutboxOp` entity in the order they were made.
+Ops are stored in the `CachedOutboxOp` entity and replay in the order they were
+made. The order is a monotonic `sequence`, not the timestamp: a create and the
+membership that points at it are queued in the same second, and the create must
+always go first so its server id can be filled into the ops that follow.
 
 ## Lifecycle
 
