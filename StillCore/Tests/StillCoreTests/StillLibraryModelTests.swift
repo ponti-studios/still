@@ -61,7 +61,8 @@ private func attributeNames(_ model: NSManagedObjectModel, _ entity: String) -> 
       attributeNames(model, "CachedCategory") == ["id", "name"])
     #expect(
       attributeNames(model, "CachedOutboxOp") == [
-        "id", "entityType", "kind", "entityId", "payload", "createdAt", "attempts", "lastError",
+        "id", "entityType", "kind", "entityId", "payload", "createdAt", "sequence", "attempts",
+        "lastError",
       ])
     #expect(
       attributeNames(model, "CachedSyncState") == ["id", "cursor"])

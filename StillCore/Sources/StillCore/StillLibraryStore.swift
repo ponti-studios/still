@@ -119,6 +119,10 @@ public final class CachedOutboxOp: NSManagedObject {
   @NSManaged public var entityId: String
   @NSManaged public var payload: String
   @NSManaged public var createdAt: String
+  /// Insertion order. A create and the membership that points at it are queued in
+  /// the same instant, so ordering on `createdAt` (whole seconds) alone is not
+  /// enough: the op must keep the order the person made them in.
+  @NSManaged public var sequence: Int64
   @NSManaged public var attempts: Int64
   @NSManaged public var lastError: String?
 }
@@ -291,6 +295,7 @@ enum StillLibraryModelV2 {
         attribute("entityId", string, optional: false),
         attribute("payload", string, optional: false, defaultValue: "{}"),
         attribute("createdAt", string, optional: false, defaultValue: ""),
+        attribute("sequence", int, optional: false, defaultValue: 0),
         attribute("attempts", int, optional: false, defaultValue: 0),
         attribute("lastError", string)),
       entity(
@@ -877,6 +882,7 @@ extension StillLibraryStore {
   static func outboxRows(_ context: NSManagedObjectContext) -> [CachedOutboxOp] {
     let request = NSFetchRequest<CachedOutboxOp>(entityName: "CachedOutboxOp")
     request.sortDescriptors = [
+      NSSortDescriptor(key: "sequence", ascending: true),
       NSSortDescriptor(key: "createdAt", ascending: true),
       NSSortDescriptor(key: "id", ascending: true),
     ]
@@ -906,7 +912,16 @@ extension StillLibraryStore {
     row.entityId = op.entityId
     row.payload = op.payload
     row.createdAt = op.createdAt
+    row.sequence = nextSequence(context)
     row.attempts = Int64(op.attempts)
+  }
+
+  /// One past the highest queued sequence, so a new op lands last in order.
+  static func nextSequence(_ context: NSManagedObjectContext) -> Int64 {
+    let request = NSFetchRequest<CachedOutboxOp>(entityName: "CachedOutboxOp")
+    request.sortDescriptors = [NSSortDescriptor(key: "sequence", ascending: false)]
+    request.fetchLimit = 1
+    return ((try? context.fetch(request))?.first?.sequence ?? 0) + 1
   }
 
   // MARK: Membership links

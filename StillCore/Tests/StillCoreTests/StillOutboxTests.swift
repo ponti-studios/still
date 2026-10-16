@@ -94,6 +94,21 @@ private func membershipOp(collectionId: String, entityId: String, kind: LibraryO
     #expect(rows(store.readPayload(), "possessions").isEmpty)
   }
 
+  @Test func pendingOpsKeepTheOrderTheyWereMade() {
+    // Both ops are queued in the same second, so ordering cannot lean on the
+    // timestamp; it must follow insertion. A membership must never be sent
+    // before the create it points at.
+    let store = StillLibraryStore(inMemory: true)
+    store.enqueue(possessionCreate(id: "client-1", name: "Lamp"))
+    store.enqueue(membershipOp(collectionId: "c1", entityId: "client-1", kind: .create))
+
+    let ops = store.pendingOps()
+    #expect(ops.count == 2)
+    #expect(ops.first?.entity == .possession)
+    #expect(ops.first?.kind == .create)
+    #expect(ops.last?.entity == .membership)
+  }
+
   @Test func flushSendsAnIdempotentCreateAndRenamesTheRow() async throws {
     let service = FakeOutboxService()
     await service.setResponse(
