@@ -95,3 +95,6 @@ Done means — cache fills from Hominem on launch; lists render from
 the cache; edits queue offline and converge through the outbox;
 airplane-mode browse and photo add work; photos roam iPhone to Mac;
 all suites green on both apps; staging migration rehearsed without loss.
+
+Decision 7 (the client outbox) is implemented in `StillCore`; the shared op
+lifecycle RN and Swift follow is written down in `docs/client-outbox.md`.

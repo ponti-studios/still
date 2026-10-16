@@ -28,12 +28,14 @@ private actor FakeLibraryService: StillAccountService {
   }
 }
 
+private let sinceEpoch = "1970-01-01T00:00:00Z"
+
 private func libraryResponses(possessions: String) -> [String: String] {
   [
-    "/api/possessions?limit=5000&offset=0": #"{"possessions":\#(possessions)}"#,
-    "/api/possessions/containers": #"{"containers":[{"id":"box","name":"Box","containerType":"box","parentContainerId":null,"description":null,"metadata":{}}]}"#,
-    "/api/collections?limit=50": #"{"collections":[{"id":"c1","name":"Keep","description":null}]}"#,
-    "/api/collections/membership": #"{"membership":[{"collectionId":"c1","entityType":"possessions","entityId":"p1"}],"count":1}"#,
+    "/api/possessions?since=\(sinceEpoch)&limit=5000&offset=0": #"{"possessions":\#(possessions),"tombstones":[],"serverTime":"2026-01-01T00:00:00Z"}"#,
+    "/api/possessions/containers?since=\(sinceEpoch)": #"{"containers":[{"id":"box","name":"Box","containerType":"box","parentContainerId":null,"description":null,"metadata":{}}],"tombstones":[],"serverTime":"2026-01-01T00:00:00Z"}"#,
+    "/api/collections?limit=50&since=\(sinceEpoch)": #"{"collections":[{"id":"c1","name":"Keep","description":null}],"tombstones":[],"serverTime":"2026-01-01T00:00:00Z"}"#,
+    "/api/collections/membership?since=\(sinceEpoch)": #"{"membership":[{"collectionId":"c1","entityType":"possessions","entityId":"p1"}],"count":1,"tombstones":[],"serverTime":"2026-01-01T00:00:00Z"}"#,
   ]
 }
 
@@ -49,8 +51,9 @@ private func rows(_ payload: [String: Any], _ key: String) -> [[String: Any]] {
     await service.setResponses(libraryResponses(possessions: lamp))
     let store = StillLibraryStore(inMemory: true)
 
-    let payload = try await LibrarySync(service: service, store: store).sync()
+    let result = try await LibrarySync(service: service, store: store).sync()
 
+    let payload = result.payload
     let possessions = rows(payload, "possessions")
     #expect(possessions.count == 1)
     #expect(possessions.first?["name"] as? String == "Lamp")
@@ -59,9 +62,10 @@ private func rows(_ payload: [String: Any], _ key: String) -> [[String: Any]] {
     #expect(rows(payload, "containers").first?["name"] as? String == "Box")
     #expect(rows(payload, "collections").first?["name"] as? String == "Keep")
     #expect(payload["membership"] as? [String: [String]] == ["p1": ["c1"]])
+    #expect(result.notices.isEmpty)
     let calls = await service.takeCalls()
-    #expect(calls.contains("/api/possessions?limit=5000&offset=0"))
-    #expect(calls.contains("/api/collections/membership"))
+    #expect(calls.contains("/api/possessions?since=\(sinceEpoch)&limit=5000&offset=0"))
+    #expect(calls.contains("/api/collections/membership?since=\(sinceEpoch)"))
     #expect(!calls.contains(where: { $0.hasPrefix("/api/collections/c") }))
   }
 
@@ -69,7 +73,7 @@ private func rows(_ payload: [String: Any], _ key: String) -> [[String: Any]] {
     let service = FakeLibraryService()
     await service.setResponses(libraryResponses(possessions: lamp))
     let store = StillLibraryStore(inMemory: true)
-    let synced = try await LibrarySync(service: service, store: store).sync()
+    _ = try await LibrarySync(service: service, store: store).sync()
     _ = await service.takeCalls()
 
     let read = store.readPayload()
@@ -77,21 +81,31 @@ private func rows(_ payload: [String: Any], _ key: String) -> [[String: Any]] {
     #expect(rows(read, "possessions").count == 1)
     #expect(rows(read, "possessions").first?["name"] as? String == "Lamp")
     #expect(read["membership"] as? [String: [String]] == ["p1": ["c1"]])
-    #expect(rows(synced, "containers").count == rows(read, "containers").count)
     #expect(await service.takeCalls() == [])
   }
 
-  @Test func syncReplacesStaleRows() async throws {
+  @Test func tombstoneRemovesTheCachedRow() async throws {
     let service = FakeLibraryService()
     await service.setResponses(libraryResponses(possessions: lamp))
     let store = StillLibraryStore(inMemory: true)
     let sync = LibrarySync(service: service, store: store)
     _ = try await sync.sync()
+    #expect(rows(store.readPayload(), "possessions").count == 1)
 
-    await service.setResponses(libraryResponses(possessions: "[]"))
+    // A later delta (resuming from the cursor) reports the row as deleted.
+    await service.setResponses([
+      "/api/possessions?since=2026-01-01T00:00:00Z&limit=5000&offset=0":
+        #"{"possessions":[],"tombstones":[{"entity":"possession","entityId":"p1","collectionId":null,"deletedAt":"2026-02-01T00:00:00Z"}],"serverTime":"2026-02-01T00:00:00Z"}"#,
+      "/api/possessions/containers?since=2026-01-01T00:00:00Z":
+        #"{"containers":[],"tombstones":[],"serverTime":"2026-02-01T00:00:00Z"}"#,
+      "/api/collections?limit=50&since=2026-01-01T00:00:00Z":
+        #"{"collections":[],"tombstones":[],"serverTime":"2026-02-01T00:00:00Z"}"#,
+      "/api/collections/membership?since=2026-01-01T00:00:00Z":
+        #"{"membership":[],"count":0,"tombstones":[],"serverTime":"2026-02-01T00:00:00Z"}"#,
+    ])
     let payload = try await sync.sync()
 
-    #expect(rows(payload, "possessions").isEmpty)
+    #expect(rows(payload.payload, "possessions").isEmpty)
     #expect(rows(store.readPayload(), "possessions").isEmpty)
   }
 
@@ -104,17 +118,20 @@ private func rows(_ payload: [String: Any], _ key: String) -> [[String: Any]] {
       )
     }
     await service.setResponses([
-      "/api/possessions?limit=5000&offset=0": #"{"possessions":[\#(firstPageRows.joined(separator: ","))]}"#,
-      "/api/possessions?limit=1000&offset=5000":
-        #"{"possessions":[{"id":"p5000","name":"Last","category":null,"status":null,"isArchived":false,"acquiredDate":null,"priceCents":0,"currencyCode":null,"containerId":null,"metadata":{},"createdAt":"2025-01-10T00:00:00Z"}]}"#,
-      "/api/possessions/containers": #"{"containers":[]}"#,
-      "/api/collections?limit=50": #"{"collections":[{"id":"c1","name":"Keep","description":null}]}"#,
-      "/api/collections/membership":
-        #"{"membership":[{"collectionId":"c1","entityType":"places","entityId":"x"},{"collectionId":"c1","entityType":"possessions","entityId":"p5000"}],"count":2}"#,
+      "/api/possessions?since=\(sinceEpoch)&limit=5000&offset=0":
+        #"{"possessions":[\#(firstPageRows.joined(separator: ","))],"tombstones":[],"serverTime":"2026-01-01T00:00:00Z"}"#,
+      "/api/possessions?since=\(sinceEpoch)&limit=1000&offset=5000":
+        #"{"possessions":[{"id":"p5000","name":"Last","category":null,"status":null,"isArchived":false,"acquiredDate":null,"priceCents":0,"currencyCode":null,"containerId":null,"metadata":{},"createdAt":"2025-01-10T00:00:00Z"}],"tombstones":[],"serverTime":"2026-01-01T00:00:00Z"}"#,
+      "/api/possessions/containers?since=\(sinceEpoch)":
+        #"{"containers":[],"tombstones":[],"serverTime":"2026-01-01T00:00:00Z"}"#,
+      "/api/collections?limit=50&since=\(sinceEpoch)":
+        #"{"collections":[{"id":"c1","name":"Keep","description":null}],"tombstones":[],"serverTime":"2026-01-01T00:00:00Z"}"#,
+      "/api/collections/membership?since=\(sinceEpoch)":
+        #"{"membership":[{"collectionId":"c1","entityType":"places","entityId":"x"},{"collectionId":"c1","entityType":"possessions","entityId":"p5000"}],"count":2,"tombstones":[],"serverTime":"2026-01-01T00:00:00Z"}"#,
     ])
     let store = StillLibraryStore(inMemory: true)
 
-    let payload = try await LibrarySync(service: service, store: store).sync()
+    let payload = try await LibrarySync(service: service, store: store).sync().payload
 
     #expect(rows(payload, "possessions").count == 5001)
     // Non-possession entity types ride the same index and are filtered out.

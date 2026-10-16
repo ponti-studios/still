@@ -1,12 +1,16 @@
 import { ApiError } from '../src/core/api';
-import { readLibrary, syncLibrary } from '../src/core/library';
+import { enqueueOp, readLibrary, syncLibrary, takeNotices } from '../src/core/library';
 
 const mockSync = jest.fn();
 const mockRead = jest.fn();
+const mockEnqueue = jest.fn();
+const mockNotices = jest.fn();
 jest.mock('../src/platform/NativeStill', () => ({
   NativeStill: () => ({
     syncLibrary: (...args: unknown[]) => mockSync(...args),
     readLibrary: (...args: unknown[]) => mockRead(...args),
+    enqueue: (...args: unknown[]) => mockEnqueue(...args),
+    takeNotices: (...args: unknown[]) => mockNotices(...args),
   }),
 }));
 
@@ -16,6 +20,8 @@ describe('library bridge', () => {
   beforeEach(() => {
     mockSync.mockReset();
     mockRead.mockReset();
+    mockEnqueue.mockReset();
+    mockNotices.mockReset();
   });
 
   it('passes a well-formed payload through', async () => {
@@ -35,5 +41,20 @@ describe('library bridge', () => {
     const error = await syncLibrary().catch((e: unknown) => e);
     expect(error).toBeInstanceOf(ApiError);
     expect((error as ApiError).status).toBe(401);
+  });
+
+  it('sends an op as fields with the payload as JSON text', async () => {
+    mockEnqueue.mockResolvedValue(payload);
+    await expect(
+      enqueueOp({ entity: 'possession', kind: 'create', entityId: 'c1', payload: { name: 'Lamp' } }),
+    ).resolves.toEqual(payload);
+    expect(mockEnqueue).toHaveBeenCalledWith('possession', 'create', 'c1', '{"name":"Lamp"}');
+  });
+
+  it('drains notices, tolerating a non-array answer', async () => {
+    mockNotices.mockResolvedValue(['a rolled-back edit']);
+    await expect(takeNotices()).resolves.toEqual(['a rolled-back edit']);
+    mockNotices.mockResolvedValue(null);
+    await expect(takeNotices()).resolves.toEqual([]);
   });
 });

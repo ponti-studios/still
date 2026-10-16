@@ -26,6 +26,10 @@ type NativeStillApi = {
   syncLibrary(): Promise<unknown>;
   /** The cached library without touching the network. Empty lists before the first sync. */
   readLibrary(): Promise<unknown>;
+  /** Queues a write (offline-capable) and applies it to the cache at once. `payload` is JSON text. */
+  enqueue(entity: string, kind: string, entityId: string, payload: string): Promise<unknown>;
+  /** Notices raised since the last call (e.g. a rolled-back edit), as strings. */
+  takeNotices(): Promise<string[]>;
   /** Whether the Overview nudge was dismissed. Kept in the app's defaults. */
   isNudgeDismissed(): Promise<boolean>;
   dismissNudge(): void;

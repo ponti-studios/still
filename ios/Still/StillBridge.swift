@@ -192,6 +192,33 @@ final class StillBridge: RCTEventEmitter {
     }
   }
 
+  /// Queues a write (offline-capable) and applies it to the cache at once,
+  /// resolving with the library to show. `payload` is the API-shaped body as
+  /// JSON text; `entityId` is the client's UUID for a create. The following
+  /// `syncLibrary` sends the queue.
+  @objc func enqueue(
+    _ entity: String, kind: String, entityId: String, payload: String,
+    resolver resolve: @escaping RCTPromiseResolveBlock,
+    rejecter reject: @escaping RCTPromiseRejectBlock
+  ) {
+    Task { @MainActor in
+      guard let account = self.account else {
+        return reject(StillProblem.signedOut.code, StillProblem.signedOut.message, nil)
+      }
+      resolve(account.enqueue(entity: entity, kind: kind, entityId: entityId, payload: payload))
+    }
+  }
+
+  /// Notices raised since the last call (e.g. a rolled-back edit). Resolves with
+  /// an array of strings, usually empty.
+  @objc func takeNotices(
+    _ resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock
+  ) {
+    Task { @MainActor in
+      resolve(self.account?.takeNotices() ?? [])
+    }
+  }
+
   /// Whether the Overview nudge was dismissed. Kept in the app's defaults.
   @objc func isNudgeDismissed(
     _ resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock

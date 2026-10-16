@@ -43,6 +43,8 @@ public final class StillAccount: ObservableObject {
   @Published public private(set) var state = StillAccountState()
   private let service: StillAccountService
   private let library: StillLibraryStore
+  /// Notices from a rolled-back edit, drained by the bridge after each sync.
+  private var notices: [String] = []
 
   public init(service: StillAccountService, library: StillLibraryStore = StillLibraryStore()) {
     self.service = service
@@ -135,6 +137,7 @@ public final class StillAccount: ObservableObject {
   public func signOut() async {
     await service.signOut()
     library.clear()
+    notices = []
     update {
       $0.email = nil
       $0.step = .idle
@@ -150,9 +153,34 @@ public final class StillAccount: ObservableObject {
   }
 
   /// Refreshes the on-device library cache from Hominem and returns it, API-shaped.
-  /// Throws `StillProblem`, with the same session handling as `api`.
+  /// Throws `StillProblem`, with the same session handling as `api`. The flush runs
+  /// first, so the person's own edits are not overwritten by a stale server row.
   public func syncLibrary() async throws -> [String: Any] {
-    try await guardingSession { try await LibrarySync(service: service, store: library).sync() }
+    let result = try await guardingSession { try await LibrarySync(service: service, store: library).sync() }
+    notices.append(contentsOf: result.notices)
+    return result.payload
+  }
+
+  /// Queues a write and applies it to the cache immediately, so an offline edit
+  /// shows at once. The next `syncLibrary` sends it. Returns the cache to show.
+  @discardableResult
+  public func enqueue(
+    entity: String, kind: String, entityId: String, payload: String
+  ) -> [String: Any] {
+    guard let entity = LibraryOp.Entity(rawValue: entity),
+      let kind = LibraryOp.Kind(rawValue: kind)
+    else { return library.readPayload() }
+    library.enqueue(
+      LibraryOp(
+        id: UUID().uuidString, entity: entity, kind: kind, entityId: entityId,
+        payload: payload, createdAt: LibraryOp.now()))
+    return library.readPayload()
+  }
+
+  /// Hands over the notices raised since the last call, and clears them.
+  public func takeNotices() -> [String] {
+    defer { notices = [] }
+    return notices
   }
 
   /// The cached library, API-shaped, without touching the network. Empty lists when

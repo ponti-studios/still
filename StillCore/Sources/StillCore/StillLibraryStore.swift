@@ -106,6 +106,31 @@ public struct CachedImageAssetInput: Sendable, Equatable {
     self.originalFilename = originalFilename
   }
 }
+/// A queued write. Applied to the cache the moment it is enqueued, so an
+/// offline edit is visible immediately, and sent to Hominem when the network
+/// allows. `entityId` is the client's own UUID for a create (also sent as
+/// `externalId`, making a re-sent op idempotent) and the server id otherwise.
+@objc(CachedOutboxOp)
+public final class CachedOutboxOp: NSManagedObject {
+  @NSManaged public var id: String
+  /// `entity` collides with `NSManagedObject.entity`, so the column is `entityType`.
+  @NSManaged public var entityType: String
+  @NSManaged public var kind: String
+  @NSManaged public var entityId: String
+  @NSManaged public var payload: String
+  @NSManaged public var createdAt: String
+  @NSManaged public var attempts: Int64
+  @NSManaged public var lastError: String?
+}
+
+/// The library's delta cursor (a single row). Delta pulls resume from here, so
+/// the whole library is not re-fetched on every launch.
+@objc(CachedSyncState)
+public final class CachedSyncState: NSManagedObject {
+  @NSManaged public var id: String
+  @NSManaged public var cursor: String?
+}
+
 /// The shipped v1 model, frozen. Do not edit: the migrator diffs real user
 /// stores against exactly this shape, and `StillLibraryModelTests` enforces it.
 enum StillLibraryModelV1 {
@@ -258,6 +283,20 @@ enum StillLibraryModelV2 {
         attribute("displayOrder", int, optional: false, defaultValue: 0),
         attribute("altText", string),
         attribute("originalFilename", string)),
+      entity(
+        "CachedOutboxOp", class: CachedOutboxOp.self,
+        attribute("id", string, optional: false),
+        attribute("entityType", string, optional: false),
+        attribute("kind", string, optional: false),
+        attribute("entityId", string, optional: false),
+        attribute("payload", string, optional: false, defaultValue: "{}"),
+        attribute("createdAt", string, optional: false, defaultValue: ""),
+        attribute("attempts", int, optional: false, defaultValue: 0),
+        attribute("lastError", string)),
+      entity(
+        "CachedSyncState", class: CachedSyncState.self,
+        attribute("id", string, optional: false),
+        attribute("cursor", string)),
     ]
     model.versionIdentifiers = ["still-library-2"]
     return model
@@ -617,7 +656,7 @@ public final class StillLibraryStore: @unchecked Sendable {
   private static func wipeAll(_ context: NSManagedObjectContext) {
     for name in [
       "CachedPossession", "CachedContainer", "CachedCollection", "CachedMembership",
-      "CachedCategory", "CachedImageAsset",
+      "CachedCategory", "CachedImageAsset", "CachedOutboxOp", "CachedSyncState",
     ] {
       let fetch = NSFetchRequest<NSManagedObject>(entityName: name)
       fetch.includesPropertyValues = false
@@ -638,6 +677,401 @@ public final class StillLibraryStore: @unchecked Sendable {
         context.delete(object)
       }
     }
+  }
+}
+
+// MARK: - Outbox
+
+// The outbox is the durable queue of writes the app has not yet confirmed with
+// Hominem. Each op is applied to the cache the moment it is enqueued, so offline
+// edits show immediately, and is removed only once the server has taken it.
+// See `LibraryOutbox` for the flush loop and the sync contract for semantics.
+extension StillLibraryStore {
+  /// Queues a write and applies it to the cache straight away. Coalesces with a
+  /// pending op for the same target, so a burst of edits stays one request and a
+  /// create followed by a delete cancels out before reaching the server.
+  public func enqueue(_ op: LibraryOp) {
+    let background = container.newBackgroundContext()
+    background.performAndWait {
+      let existing = Self.outboxRows(background)
+        .map(Self.op(from:))
+        .first { $0.targetsSame(as: op) }
+
+      if let current = existing {
+        switch (op.kind, current.kind) {
+        case (.update, .create), (.update, .update):
+          // Fold the change into the queued op; the server sees one request.
+          if let row = Self.outboxRow(background, id: current.id) {
+            row.payload = LibraryOp.merge(current.payload, op.payload)
+          }
+          Self.apply(op, in: background)
+        case (.delete, .create):
+          // The row never reached the server: drop the op and its cached row.
+          Self.deleteRow(background, entity: "CachedOutboxOp", id: current.id)
+          Self.removeCached(context: background, for: op)
+        default:
+          Self.deleteRow(background, entity: "CachedOutboxOp", id: current.id)
+          Self.insertOp(background, op)
+          Self.apply(op, in: background)
+        }
+      } else {
+        Self.insertOp(background, op)
+        Self.apply(op, in: background)
+      }
+      _ = try? background.save()
+    }
+  }
+
+  /// The queued ops, oldest first. What `LibraryOutbox` sends.
+  public func pendingOps() -> [LibraryOp] {
+    container.viewContext.performAndWait {
+      Self.outboxRows(container.viewContext).map(Self.op(from:))
+    }
+  }
+
+  public func hasPendingOps() -> Bool {
+    container.viewContext.performAndWait {
+      let request = NSFetchRequest<CachedOutboxOp>(entityName: "CachedOutboxOp")
+      request.fetchLimit = 1
+      return ((try? container.viewContext.count(for: request)) ?? 0) > 0
+    }
+  }
+
+  public func removeOp(id: String) {
+    let background = container.newBackgroundContext()
+    background.performAndWait {
+      Self.deleteRow(background, entity: "CachedOutboxOp", id: id)
+      _ = try? background.save()
+    }
+  }
+
+  /// A create landed: the server assigned a real id. Rename the optimistic row
+  /// and rewrite any later op that referred to the client id, then drop the op —
+  /// all in one save, so a crash cannot leave a half-remapped outbox.
+  public func completeCreate(_ op: LibraryOp, serverId: String) {
+    let background = container.newBackgroundContext()
+    background.performAndWait {
+      switch op.entity {
+      case .possession:
+        Self.renameRow(background, entity: "CachedPossession", from: op.entityId, to: serverId)
+        Self.renameLinks(background, entityIdFrom: op.entityId, to: serverId)
+      case .container:
+        Self.renameRow(background, entity: "CachedContainer", from: op.entityId, to: serverId)
+      case .collection:
+        Self.renameRow(background, entity: "CachedCollection", from: op.entityId, to: serverId)
+        Self.renameLinks(background, collectionIdFrom: op.entityId, to: serverId)
+      case .membership:
+        break
+      }
+      for row in Self.outboxRows(background) where row.id != op.id {
+        if row.entityId == op.entityId { row.entityId = serverId }
+        if row.payload.contains(op.entityId) {
+          row.payload = row.payload.replacingOccurrences(of: op.entityId, with: serverId)
+        }
+      }
+      Self.deleteRow(background, entity: "CachedOutboxOp", id: op.id)
+      _ = try? background.save()
+    }
+  }
+
+  /// Re-applies every queued op on top of a freshly pulled cache, so a delta
+  /// pull cannot hide an edit that has not been confirmed yet.
+  public func reapplyPendingOps() {
+    guard hasPendingOps() else { return }
+    let background = container.newBackgroundContext()
+    background.performAndWait {
+      for op in Self.outboxRows(background).map(Self.op(from:)) {
+        Self.apply(op, in: background)
+      }
+      _ = try? background.save()
+    }
+  }
+
+  /// Applies a delta pull: upserts changed rows, deletes tombstoned ones. Never
+  /// wipes, so the cursor can resume and an offline edit is not disturbed.
+  public func applyDelta(_ delta: LibraryDelta) {
+    let background = container.newBackgroundContext()
+    background.performAndWait {
+      for json in delta.possessions {
+        if let id = json.string("id") { Self.upsertPossession(background, id: id, json: json) }
+      }
+      for json in delta.containers {
+        if let id = json.string("id") { Self.upsertContainer(background, id: id, json: json) }
+      }
+      for json in delta.collections {
+        if let id = json.string("id") { Self.upsertCollection(background, id: id, json: json) }
+      }
+      for link in delta.membership {
+        Self.ensureLink(background, collectionId: link.collectionId, entityId: link.entityId)
+      }
+      for tombstone in delta.tombstones {
+        switch tombstone.entity {
+        case .possession:
+          Self.deleteRow(background, entity: "CachedPossession", id: tombstone.entityId)
+          Self.deleteLinks(background, entityId: tombstone.entityId)
+        case .container:
+          Self.deleteRow(background, entity: "CachedContainer", id: tombstone.entityId)
+        case .collection:
+          Self.deleteRow(background, entity: "CachedCollection", id: tombstone.entityId)
+          Self.deleteLinks(background, collectionId: tombstone.entityId)
+        case .collectionItem:
+          if let collectionId = tombstone.collectionId {
+            Self.deleteLink(background, collectionId: collectionId, entityId: tombstone.entityId)
+          }
+        }
+      }
+      _ = try? background.save()
+    }
+  }
+
+  /// Where the next delta pull resumes. nil until the first sync.
+  public func cursor() -> String? {
+    container.viewContext.performAndWait {
+      let request = NSFetchRequest<CachedSyncState>(entityName: "CachedSyncState")
+      request.fetchLimit = 1
+      return (try? container.viewContext.fetch(request))?.first?.cursor
+    }
+  }
+
+  public func setCursor(_ value: String) {
+    let background = container.newBackgroundContext()
+    background.performAndWait {
+      let request = NSFetchRequest<CachedSyncState>(entityName: "CachedSyncState")
+      request.fetchLimit = 1
+      let row: CachedSyncState
+      if let existing = (try? background.fetch(request))?.first {
+        row = existing
+      } else {
+        row = CachedSyncState(context: background)
+        row.id = "library"
+      }
+      row.cursor = value
+      _ = try? background.save()
+    }
+  }
+
+  // MARK: Reading and writing rows
+
+  static func object<T: NSManagedObject>(
+    _ context: NSManagedObjectContext, _ entity: String, id: String, as type: T.Type
+  ) -> T? {
+    let request = NSFetchRequest<T>(entityName: entity)
+    request.predicate = NSPredicate(format: "id == %@", id)
+    request.fetchLimit = 1
+    return (try? context.fetch(request))?.first
+  }
+
+  static func deleteRow(_ context: NSManagedObjectContext, entity: String, id: String) {
+    let request = NSFetchRequest<NSManagedObject>(entityName: entity)
+    request.predicate = NSPredicate(format: "id == %@", id)
+    request.includesPropertyValues = false
+    for object in (try? context.fetch(request)) ?? [] { context.delete(object) }
+  }
+
+  static func renameRow(_ context: NSManagedObjectContext, entity: String, from: String, to: String) {
+    let request = NSFetchRequest<NSManagedObject>(entityName: entity)
+    request.predicate = NSPredicate(format: "id == %@", from)
+    for object in (try? context.fetch(request)) ?? [] { object.setValue(to, forKey: "id") }
+  }
+
+  static func outboxRows(_ context: NSManagedObjectContext) -> [CachedOutboxOp] {
+    let request = NSFetchRequest<CachedOutboxOp>(entityName: "CachedOutboxOp")
+    request.sortDescriptors = [
+      NSSortDescriptor(key: "createdAt", ascending: true),
+      NSSortDescriptor(key: "id", ascending: true),
+    ]
+    return (try? context.fetch(request)) ?? []
+  }
+
+  static func outboxRow(_ context: NSManagedObjectContext, id: String) -> CachedOutboxOp? {
+    object(context, "CachedOutboxOp", id: id, as: CachedOutboxOp.self)
+  }
+
+  static func op(from row: CachedOutboxOp) -> LibraryOp {
+    LibraryOp(
+      id: row.id,
+      entity: LibraryOp.Entity(rawValue: row.entityType) ?? .possession,
+      kind: LibraryOp.Kind(rawValue: row.kind) ?? .update,
+      entityId: row.entityId,
+      payload: row.payload,
+      createdAt: row.createdAt,
+      attempts: Int(row.attempts))
+  }
+
+  static func insertOp(_ context: NSManagedObjectContext, _ op: LibraryOp) {
+    let row = CachedOutboxOp(context: context)
+    row.id = op.id
+    row.entityType = op.entity.rawValue
+    row.kind = op.kind.rawValue
+    row.entityId = op.entityId
+    row.payload = op.payload
+    row.createdAt = op.createdAt
+    row.attempts = Int64(op.attempts)
+  }
+
+  // MARK: Membership links
+
+  static func ensureLink(_ context: NSManagedObjectContext, collectionId: String, entityId: String) {
+    let request = NSFetchRequest<CachedMembership>(entityName: "CachedMembership")
+    request.predicate = NSPredicate(
+      format: "collectionId == %@ AND entityId == %@", collectionId, entityId)
+    request.fetchLimit = 1
+    guard ((try? context.fetch(request)) ?? []).isEmpty else { return }
+    let row = CachedMembership(context: context)
+    row.collectionId = collectionId
+    row.entityId = entityId
+  }
+
+  static func deleteLink(_ context: NSManagedObjectContext, collectionId: String, entityId: String) {
+    let request = NSFetchRequest<CachedMembership>(entityName: "CachedMembership")
+    request.predicate = NSPredicate(
+      format: "collectionId == %@ AND entityId == %@", collectionId, entityId)
+    request.includesPropertyValues = false
+    for object in (try? context.fetch(request)) ?? [] { context.delete(object) }
+  }
+
+  static func deleteLinks(_ context: NSManagedObjectContext, entityId: String) {
+    let request = NSFetchRequest<CachedMembership>(entityName: "CachedMembership")
+    request.predicate = NSPredicate(format: "entityId == %@", entityId)
+    request.includesPropertyValues = false
+    for object in (try? context.fetch(request)) ?? [] { context.delete(object) }
+  }
+
+  static func deleteLinks(_ context: NSManagedObjectContext, collectionId: String) {
+    let request = NSFetchRequest<CachedMembership>(entityName: "CachedMembership")
+    request.predicate = NSPredicate(format: "collectionId == %@", collectionId)
+    request.includesPropertyValues = false
+    for object in (try? context.fetch(request)) ?? [] { context.delete(object) }
+  }
+
+  static func renameLinks(
+    _ context: NSManagedObjectContext, entityIdFrom: String, to: String
+  ) {
+    let request = NSFetchRequest<CachedMembership>(entityName: "CachedMembership")
+    request.predicate = NSPredicate(format: "entityId == %@", entityIdFrom)
+    for object in (try? context.fetch(request)) ?? [] { object.entityId = to }
+  }
+
+  static func renameLinks(
+    _ context: NSManagedObjectContext, collectionIdFrom: String, to: String
+  ) {
+    let request = NSFetchRequest<CachedMembership>(entityName: "CachedMembership")
+    request.predicate = NSPredicate(format: "collectionId == %@", collectionIdFrom)
+    for object in (try? context.fetch(request)) ?? [] { object.collectionId = to }
+  }
+
+  // MARK: Applying an op to the cache
+
+  static func apply(_ op: LibraryOp, in context: NSManagedObjectContext) {
+    guard op.kind != .delete else {
+      removeCached(context: context, for: op)
+      return
+    }
+    let json = LibraryOp.object(op.payload)
+    switch op.entity {
+    case .possession:
+      upsertPossession(context, id: op.entityId, json: json)
+    case .container:
+      upsertContainer(context, id: op.entityId, json: json)
+    case .collection:
+      upsertCollection(context, id: op.entityId, json: json)
+    case .membership:
+      if let collectionId = op.collectionId {
+        ensureLink(context, collectionId: collectionId, entityId: op.entityId)
+      }
+    }
+  }
+
+  static func removeCached(context: NSManagedObjectContext, for op: LibraryOp) {
+    switch op.entity {
+    case .possession:
+      deleteRow(context, entity: "CachedPossession", id: op.entityId)
+      deleteLinks(context, entityId: op.entityId)
+    case .container:
+      deleteRow(context, entity: "CachedContainer", id: op.entityId)
+    case .collection:
+      deleteRow(context, entity: "CachedCollection", id: op.entityId)
+      deleteLinks(context, collectionId: op.entityId)
+    case .membership:
+      if let collectionId = op.collectionId {
+        deleteLink(context, collectionId: collectionId, entityId: op.entityId)
+      }
+    }
+  }
+
+  static func upsertPossession(
+    _ context: NSManagedObjectContext, id: String, json: [String: Any]
+  ) {
+    let row: CachedPossession
+    if let existing = object(context, "CachedPossession", id: id, as: CachedPossession.self) {
+      row = existing
+    } else {
+      row = CachedPossession(context: context)
+      row.id = id
+      row.name = ""
+      row.metadata = "{}"
+      row.createdAt = json.string("createdAt") ?? LibraryOp.now()
+    }
+    if json["name"] != nil { row.name = json.string("name") ?? "" }
+    if json["category"] != nil { row.category = json.string("category") }
+    if json["status"] != nil { row.status = json.string("status") }
+    if json["isArchived"] != nil { row.isArchived = json.bool("isArchived") }
+    if json["acquiredDate"] != nil { row.acquiredDate = json.string("acquiredDate") }
+    if json["priceCents"] != nil { row.priceCents = json.int("priceCents") }
+    if json["sellPriceCents"] != nil { row.sellPriceCents = json.int("sellPriceCents") }
+    if json["currencyCode"] != nil { row.currencyCode = json.string("currencyCode") }
+    if json["containerId"] != nil { row.containerId = json.string("containerId") }
+    if json["metadata"] != nil { row.metadata = json.text("metadata") }
+    if json["brand"] != nil { row.brand = json.string("brand") }
+    if json["model"] != nil { row.model = json.string("model") }
+    if json["subCategory"] != nil { row.subCategory = json.string("subCategory") }
+    if json["url"] != nil { row.url = json.string("url") }
+    if json["notes"] != nil { row.notes = json.string("notes") }
+    if json["serialNumber"] != nil { row.serialNumber = json.string("serialNumber") }
+    if json["size"] != nil { row.size = json.string("size") }
+    if json["color"] != nil { row.color = json.string("color") }
+    if json["placement"] != nil { row.placement = json.string("placement") }
+    if json["categoryId"] != nil { row.categoryId = json.string("categoryId") }
+    if json["retiredDate"] != nil { row.retiredDate = json.string("retiredDate") }
+    if json["updatedAt"] != nil { row.updatedAt = json.string("updatedAt") }
+  }
+
+  static func upsertContainer(
+    _ context: NSManagedObjectContext, id: String, json: [String: Any]
+  ) {
+    let row: CachedContainer
+    if let existing = object(context, "CachedContainer", id: id, as: CachedContainer.self) {
+      row = existing
+    } else {
+      row = CachedContainer(context: context)
+      row.id = id
+      row.name = ""
+      row.metadata = "{}"
+    }
+    if json["name"] != nil { row.name = json.string("name") ?? "" }
+    if json["containerType"] != nil { row.containerType = json.string("containerType") }
+    if json["parentContainerId"] != nil { row.parentContainerId = json.string("parentContainerId") }
+    if json["description"] != nil { row.desc = json.string("description") }
+    if json["metadata"] != nil { row.metadata = json.text("metadata") }
+    if json["updatedAt"] != nil { row.updatedAt = json.string("updatedAt") }
+    if json["deletedAt"] != nil { row.deletedAt = json.string("deletedAt") }
+  }
+
+  static func upsertCollection(
+    _ context: NSManagedObjectContext, id: String, json: [String: Any]
+  ) {
+    let row: CachedCollection
+    if let existing = object(context, "CachedCollection", id: id, as: CachedCollection.self) {
+      row = existing
+    } else {
+      row = CachedCollection(context: context)
+      row.id = id
+      row.name = ""
+    }
+    if json["name"] != nil { row.name = json.string("name") ?? "" }
+    if json["description"] != nil { row.desc = json.string("description") }
+    if json["updatedAt"] != nil { row.updatedAt = json.string("updatedAt") }
+    if json["deletedAt"] != nil { row.deletedAt = json.string("deletedAt") }
   }
 }
 

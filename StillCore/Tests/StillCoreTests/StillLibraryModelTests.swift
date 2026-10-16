@@ -37,7 +37,7 @@ private func attributeNames(_ model: NSManagedObjectModel, _ entity: String) -> 
     #expect(model.versionIdentifiers == ["still-library-2"])
     #expect(Set(model.entitiesByName.keys) == [
       "CachedPossession", "CachedContainer", "CachedCollection", "CachedMembership",
-      "CachedCategory", "CachedImageAsset",
+      "CachedCategory", "CachedImageAsset", "CachedOutboxOp", "CachedSyncState",
     ])
     let possession = attributeNames(model, "CachedPossession")
     for added in [
@@ -59,6 +59,12 @@ private func attributeNames(_ model: NSManagedObjectModel, _ entity: String) -> 
     #expect(assets?["displayOrder"]?.isOptional == false)
     #expect(
       attributeNames(model, "CachedCategory") == ["id", "name"])
+    #expect(
+      attributeNames(model, "CachedOutboxOp") == [
+        "id", "entityType", "kind", "entityId", "payload", "createdAt", "attempts", "lastError",
+      ])
+    #expect(
+      attributeNames(model, "CachedSyncState") == ["id", "cursor"])
   }
 
   @Test func v2ModelLoadsAndRoundTrips() throws {

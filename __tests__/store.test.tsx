@@ -4,19 +4,21 @@ import { ApiError } from '../src/core/api';
 import type { LibraryPayload } from '../src/core/library';
 import { useStore, type Store } from '../src/core/store';
 
-const mockApi = jest.fn();
+const mockEnqueue = jest.fn();
 const mockSync = jest.fn();
 const mockRead = jest.fn();
+const mockNotices = jest.fn();
 const mockDeleteStoredPhoto = jest.fn();
 
 jest.mock('../src/core/api', () => ({
   ApiError: jest.requireActual('../src/core/api').ApiError,
-  api: (...args: unknown[]) => mockApi(...args),
 }));
 
 jest.mock('../src/core/library', () => ({
   syncLibrary: (...args: unknown[]) => mockSync(...args),
   readLibrary: (...args: unknown[]) => mockRead(...args),
+  enqueueOp: (...args: unknown[]) => mockEnqueue(...args),
+  takeNotices: (...args: unknown[]) => mockNotices(...args),
 }));
 
 jest.mock('../src/core/photos', () => ({
@@ -62,12 +64,15 @@ async function flush() {
 
 describe('useStore', () => {
   beforeEach(() => {
-    mockApi.mockReset();
+    mockEnqueue.mockReset();
     mockSync.mockReset();
     mockRead.mockReset();
+    mockNotices.mockReset();
     mockDeleteStoredPhoto.mockReset();
     mockSync.mockResolvedValue(library());
     mockRead.mockRejectedValue(new Error('no cache'));
+    mockEnqueue.mockResolvedValue(library());
+    mockNotices.mockResolvedValue([]);
   });
 
   it('loads items on mount', async () => {
@@ -106,57 +111,81 @@ describe('useStore', () => {
     expect(mockRead).not.toHaveBeenCalled();
   });
 
-  it('adds an item and refreshes from the cache', async () => {
+  it('shows a notice from the native outbox', async () => {
+    mockNotices.mockResolvedValue([
+      'A change couldn’t be saved and was undone. Pull to refresh.',
+    ]);
     const seen = mount();
     await flush();
-    mockApi.mockImplementation((method: string, path: string) => {
-      if (method === 'POST' && path === '/possessions') {
-        return Promise.resolve({ possession: { ...possession, id: 'p2', name: 'Chair' } });
-      }
-      throw new Error(`unexpected call ${method} ${path}`);
-    });
-    mockSync.mockResolvedValue(
-      library({ possessions: [{ ...possession, id: 'p2', name: 'Chair' }, possession] }),
-    );
+    expect(seen.current?.notice).toContain('couldn’t be saved');
+  });
+
+  it('queues a new item and its collection links', async () => {
+    mockSync.mockResolvedValue(emptyLibrary);
+    const seen = mount();
+    await flush();
+    mockSync.mockResolvedValue(library({ possessions: [{ ...possession, id: 'p2', name: 'Chair' }] }));
+
     await ReactTestRenderer.act(async () => {
       await seen.current?.addItem({
         name: 'Chair', category: 'home', status: 'Owned', value: 30,
-        currency: 'GBP', vendor: undefined, containerId: undefined, collectionIds: [],
+        currency: 'GBP', vendor: undefined, containerId: undefined, collectionIds: ['c1'],
       });
     });
-    expect(seen.current?.items.map((i) => i.name)).toEqual(['Chair', 'Lamp']);
+
+    const create = mockEnqueue.mock.calls.find(([op]) => op.entity === 'possession')?.[0];
+    expect(create).toMatchObject({
+      entity: 'possession', kind: 'create', payload: { name: 'Chair', externalId: create.entityId },
+    });
+    const membership = mockEnqueue.mock.calls.find(([op]) => op.entity === 'membership')?.[0];
+    expect(membership).toMatchObject({
+      entity: 'membership', kind: 'create', entityId: create.entityId, payload: { collectionId: 'c1' },
+    });
+    expect(seen.current?.items.map((i) => i.name)).toEqual(['Chair']);
   });
 
-  it('deletes the photo file with the item', async () => {
+  it('queues an edit and updates the screen at once', async () => {
+    const seen = mount();
+    await flush();
+
+    await ReactTestRenderer.act(async () => {
+      await seen.current?.updateItem('p1', { name: 'Desk Lamp' });
+    });
+
+    const update = mockEnqueue.mock.calls.find(([op]) => op.kind === 'update')?.[0];
+    expect(update).toMatchObject({
+      entity: 'possession', kind: 'update', entityId: 'p1', payload: { name: 'Desk Lamp' },
+    });
+  });
+
+  it('queues a delete and clears the photo file', async () => {
     mockSync.mockResolvedValue(
       library({ possessions: [{ ...possession, metadata: { imageUrl: 'file:///stored/x.jpg' } }] }),
     );
-    mockApi.mockImplementation((method: string, path: string) => {
-      if (method === 'DELETE' && path === '/possessions/p1') return Promise.resolve({});
-      throw new Error(`unexpected call ${method} ${path}`);
-    });
     mockDeleteStoredPhoto.mockResolvedValue(undefined);
     const seen = mount();
     await flush();
     mockSync.mockResolvedValue(emptyLibrary);
+
     await ReactTestRenderer.act(async () => {
       await seen.current?.deleteItem('p1');
     });
+
     expect(seen.current?.items).toEqual([]);
     expect(mockDeleteStoredPhoto).toHaveBeenCalledWith('file:///stored/x.jpg');
+    const del = mockEnqueue.mock.calls.find(([op]) => op.kind === 'delete')?.[0];
+    expect(del).toMatchObject({ entity: 'possession', kind: 'delete', entityId: 'p1' });
   });
 
   it('skips file cleanup when the item has no photo', async () => {
     const seen = mount();
     await flush();
-    mockApi.mockImplementation((method: string, path: string) => {
-      if (method === 'DELETE' && path === '/possessions/p1') return Promise.resolve({});
-      throw new Error(`unexpected call ${method} ${path}`);
-    });
     mockSync.mockResolvedValue(emptyLibrary);
+
     await ReactTestRenderer.act(async () => {
       await seen.current?.deleteItem('p1');
     });
+
     expect(mockDeleteStoredPhoto).not.toHaveBeenCalled();
   });
 });
