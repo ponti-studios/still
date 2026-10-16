@@ -1,9 +1,13 @@
 import type { ApiContainer, ApiPossession } from './apiTypes';
 import { DEFAULT_CURRENCY, type Group, type Item, type ItemInput, type Status } from './types';
 
-const FROM_DB: Record<string, Status> = {
+// Hominem status -> Still status. This is the client half of the canonical table
+// in docs/status-category-mapping.md; Hominem's packages/db status.ts is the
+// source. Every value the API can return belongs here, or add it in both places.
+export const FROM_DB: Record<string, Status> = {
   wishlist: 'Wanted', planned: 'Planned', ordered: 'Ordered', delivered: 'Delivered',
   owned: 'Owned', in_use: 'Owned', retired: 'Archived', disposed: 'Archived',
+  donated: 'Archived', sold: 'Archived',
 };
 const TO_DB: Record<Exclude<Status, 'Archived'>, string> = {
   Wanted: 'wishlist', Planned: 'planned', Ordered: 'ordered', Delivered: 'delivered', Owned: 'owned',
