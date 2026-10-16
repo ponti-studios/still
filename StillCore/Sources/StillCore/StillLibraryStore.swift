@@ -270,30 +270,106 @@ public final class StillLibraryStore: @unchecked Sendable {
   }
 
   private static func makeContainer(inMemory: Bool, storeURL: URL?) -> NSPersistentContainer? {
-    // v1 until the step-3 migrator moves existing stores to v2.
-    let container = NSPersistentContainer(
-      name: "StillLibrary", managedObjectModel: StillLibraryModelV1.make())
     if inMemory {
+      let container = NSPersistentContainer(
+        name: "StillLibrary", managedObjectModel: StillLibraryModelV2.make())
       let description = NSPersistentStoreDescription()
       description.type = NSInMemoryStoreType
       container.persistentStoreDescriptions = [description]
-    } else {
-      let url: URL
-      if let storeURL {
-        try? FileManager.default.createDirectory(
-          at: storeURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-        url = storeURL
-      } else {
-        guard let `default` = defaultStoreURL() else { return nil }
-        url = `default`
-      }
-      container.persistentStoreDescriptions = [
-        NSPersistentStoreDescription(url: url),
-      ]
+      return load(container)
     }
+    let url: URL
+    if let storeURL {
+      try? FileManager.default.createDirectory(
+        at: storeURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+      url = storeURL
+    } else {
+      guard let `default` = defaultStoreURL() else { return nil }
+      url = `default`
+    }
+    if !FileManager.default.fileExists(atPath: url.path) {
+      return freshFileContainer(at: url)
+    }
+    if isCompatible(model: StillLibraryModelV2.make(), storeURL: url) {
+      return freshFileContainer(at: url)
+    }
+    if isCompatible(model: StillLibraryModelV1.make(), storeURL: url) {
+      guard migrateV1ToV2(storeURL: url) else { return nil }
+      return freshFileContainer(at: url)
+    }
+    // Unknown version or unreadable store: the cache is derived data, so wipe
+    // it and start over rather than stranding the user. The next sync refills.
+    destroyStore(at: url)
+    return freshFileContainer(at: url)
+  }
+
+  /// A v2 file container. The automatic-migration options are set (harmless,
+  /// future-proof), but programmatic models are not discoverable in bundles,
+  /// so the explicit `migrateV1ToV2` above is the authoritative path.
+  private static func freshFileContainer(at url: URL) -> NSPersistentContainer? {
+    let container = NSPersistentContainer(
+      name: "StillLibrary", managedObjectModel: StillLibraryModelV2.make())
+    let description = NSPersistentStoreDescription(url: url)
+    description.setOption(true as NSNumber, forKey: NSMigratePersistentStoresAutomaticallyOption)
+    description.setOption(true as NSNumber, forKey: NSInferMappingModelAutomaticallyOption)
+    container.persistentStoreDescriptions = [description]
+    return load(container)
+  }
+
+  private static func load(_ container: NSPersistentContainer) -> NSPersistentContainer? {
     var loaded = false
     container.loadPersistentStores { _, error in loaded = error == nil }
     return loaded ? container : nil
+  }
+
+  private static func isCompatible(model: NSManagedObjectModel, storeURL: URL) -> Bool {
+    guard
+      let metadata = try? NSPersistentStoreCoordinator.metadataForPersistentStore(
+        ofType: NSSQLiteStoreType, at: storeURL)
+    else { return false }
+    return model.isConfiguration(withName: nil, compatibleWithStoreMetadata: metadata)
+  }
+
+  /// Moves a v1 store to v2 with an inferred mapping (every v1→v2 change is
+  /// additive, so Core Data migrates the SQLite file in place via SQL).
+  /// Returns false on any failure; the caller falls back, never crashes.
+  private static func migrateV1ToV2(storeURL: URL) -> Bool {
+    guard
+      let mapping = try? NSMappingModel.inferredMappingModel(
+        forSourceModel: StillLibraryModelV1.make(),
+        destinationModel: StillLibraryModelV2.make())
+    else { return false }
+    let manager = NSMigrationManager(
+      sourceModel: StillLibraryModelV1.make(),
+      destinationModel: StillLibraryModelV2.make())
+    let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    do {
+      try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+      let tempURL = tempDir.appendingPathComponent(storeURL.lastPathComponent)
+      try manager.migrateStore(
+        from: storeURL, sourceType: NSSQLiteStoreType, options: nil,
+        with: mapping, toDestinationURL: tempURL,
+        destinationType: NSSQLiteStoreType, destinationOptions: nil)
+      for suffix in ["", "-wal", "-shm"] {
+        let original = URL(fileURLWithPath: storeURL.path + suffix)
+        try? FileManager.default.removeItem(at: original)
+        let migrated = URL(fileURLWithPath: tempURL.path + suffix)
+        if FileManager.default.fileExists(atPath: migrated.path) {
+          try FileManager.default.moveItem(at: migrated, to: original)
+        }
+      }
+      try? FileManager.default.removeItem(at: tempDir)
+      return true
+    } catch {
+      try? FileManager.default.removeItem(at: tempDir)
+      return false
+    }
+  }
+
+  private static func destroyStore(at url: URL) {
+    for suffix in ["", "-wal", "-shm"] {
+      try? FileManager.default.removeItem(at: URL(fileURLWithPath: url.path + suffix))
+    }
   }
 
   /// The payload shape, with empty lists: what reads resolve before the first sync.

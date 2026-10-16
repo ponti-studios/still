@@ -1,3 +1,4 @@
+import CoreData
 import Foundation
 import Testing
 
@@ -142,6 +143,76 @@ private func rows(_ payload: [String: Any], _ key: String) -> [[String: Any]] {
     let second = StillLibraryStore(storeURL: url)
 
     #expect(rows(second.readPayload(), "possessions").first?["name"] as? String == "Lamp")
+  }
+
+  private func writeV1Fixture(at url: URL) throws {
+    // A faithful shipped-v1 store: the frozen v1 model, v1 attributes only.
+    try FileManager.default.createDirectory(
+      at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+    let container = NSPersistentContainer(
+      name: "StillLibrary", managedObjectModel: StillLibraryModelV1.make())
+    container.persistentStoreDescriptions = [NSPersistentStoreDescription(url: url)]
+    var loaded = false
+    container.loadPersistentStores { _, error in loaded = error == nil }
+    #expect(loaded)
+    let context = container.newBackgroundContext()
+    try context.performAndWait {
+      let row = CachedPossession(context: context)
+      row.id = "p1"
+      row.name = "Lamp"
+      row.priceCents = 1200
+      row.metadata = #"{"vendor":"Ikea"}"#
+      row.createdAt = "2025-01-10T00:00:00Z"
+      try context.save()
+    }
+  }
+
+  private func isV2Store(at url: URL) -> Bool {
+    guard
+      let metadata = try? NSPersistentStoreCoordinator.metadataForPersistentStore(
+        ofType: NSSQLiteStoreType, at: url)
+    else { return false }
+    return StillLibraryModelV2.make().isConfiguration(
+      withName: nil, compatibleWithStoreMetadata: metadata)
+  }
+
+  @Test func v1StoreMigratesWithRowsPreserved() throws {
+    let url = FileManager.default.temporaryDirectory
+      .appendingPathComponent(UUID().uuidString)
+      .appendingPathComponent("StillLibrary.sqlite")
+    try writeV1Fixture(at: url)
+    #expect(!isV2Store(at: url))
+
+    let store = StillLibraryStore(storeURL: url)
+
+    let possessions = rows(store.readPayload(), "possessions")
+    #expect(possessions.count == 1)
+    #expect(possessions.first?["name"] as? String == "Lamp")
+    #expect(possessions.first?["priceCents"] as? Int64 == 1200)
+    #expect(isV2Store(at: url), "the file on disk is now a v2 store")
+  }
+
+  @Test func corruptStoreStartsOverInsteadOfCrashing() throws {
+    let url = FileManager.default.temporaryDirectory
+      .appendingPathComponent(UUID().uuidString)
+      .appendingPathComponent("StillLibrary.sqlite")
+    try FileManager.default.createDirectory(
+      at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try Data("not a database".utf8).write(to: url)
+
+    let store = StillLibraryStore(storeURL: url)
+
+    #expect(rows(store.readPayload(), "possessions").isEmpty)
+  }
+
+  @Test func freshInstallCreatesV2Store() {
+    let url = FileManager.default.temporaryDirectory
+      .appendingPathComponent(UUID().uuidString)
+      .appendingPathComponent("StillLibrary.sqlite")
+
+    _ = StillLibraryStore(storeURL: url)
+
+    #expect(isV2Store(at: url))
   }
 
   @Test func malformedResponsesThrowOther() async {
