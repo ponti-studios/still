@@ -46,6 +46,12 @@ public struct LibrarySync: Sendable {
       method: "GET", path: "/api/collections?limit=50&since=\(encoded)", body: nil)
     async let membershipData = service.request(
       method: "GET", path: "/api/collections/membership?since=\(encoded)", body: nil)
+    // The managed categories are a nicety, not part of the record set: a server
+    // that does not answer (an older deploy, a blip) keeps the list already
+    // cached rather than failing the whole pull. It is a full list, so it is
+    // left out of the cursor.
+    async let categoriesData = try? service.request(
+      method: "GET", path: "/api/possessions/categories", body: nil)
     let possessionPage = try await fetchPossessions(since: encoded)
     let (containersJson, collectionsJson, membershipJson) = try await (
       containersData, collectionsData, membershipData)
@@ -61,9 +67,26 @@ public struct LibrarySync: Sendable {
     delta.tombstones.append(contentsOf: Self.tombstones(membershipJson))
     store.applyDelta(delta)
 
+    let categoriesJson = await categoriesData
+    if let categories = categoriesJson.flatMap(Self.categoryRows) {
+      store.replaceCategories(categories)
+    }
+
     let times = [possessionPage.serverTime, Self.serverTime(containersJson),
       Self.serverTime(collectionsJson), Self.serverTime(membershipJson)].compactMap { $0 }
     return times.min() ?? since
+  }
+
+  /// The managed category records, or nil when the response is not one (so the
+  /// caller keeps what it has rather than clearing the list).
+  private static func categoryRows(_ data: Data) -> [(id: String, name: String)]? {
+    guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+      let rows = object["categories"] as? [[String: Any]]
+    else { return nil }
+    return rows.compactMap { row in
+      guard let id = row["id"] as? String, let name = row["name"] as? String else { return nil }
+      return (id, name)
+    }
   }
 
   /// All possessions changed since `since`, paged. The first page keeps the

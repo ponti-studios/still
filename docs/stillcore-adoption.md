@@ -87,10 +87,13 @@ table.
 
 Categories stay managed records on Hominem: a write sends the category's name
 and `PossessionCategoryRepository.resolve` finds or creates the one record, so
-`Technology` and `technology` are one category. The Mac shows the categories in
-use (case-insensitively deduped) because the API does not hand the managed
-records back yet; that follows in
-[`008` follow-up: a categories endpoint](../../.opencode/plan/008-mac-adopts-stillcore.md).
+`Technology` and `technology` are one category. `LibrarySync` pulls the whole
+set from `GET /api/possessions/categories` each sync into `CachedCategory`, and
+it rides back on the library payload, so the Mac offers every managed category —
+including one no item uses yet. The pull is best effort: a server without the
+endpoint (or a blip) keeps the list already cached instead of failing the sync.
+The Mac also falls back to the categories its items use, for a client that has
+not pulled yet.
 
 ## Backup and quarantine, re-decided
 

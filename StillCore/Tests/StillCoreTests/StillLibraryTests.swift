@@ -7,6 +7,7 @@ import Testing
 private actor FakeLibraryService: StillAccountService {
   private var responses: [String: String] = [:]
   private var failure: StillProblem?
+  private var failingPaths: Set<String> = []
   private var calls: [String] = []
 
   func signedInEmail() async throws -> String? { nil }
@@ -16,12 +17,14 @@ private actor FakeLibraryService: StillAccountService {
 
   func request(method: String, path: String, body: String?) async throws -> Data {
     if let failure { throw failure }
+    if failingPaths.contains(path) { throw StillProblem.notFound }
     calls.append(path)
     return Data((responses[path] ?? "{}").utf8)
   }
 
   func setResponses(_ responses: [String: String]) { self.responses = responses }
   func setFailure(_ failure: StillProblem?) { self.failure = failure }
+  func setFailingPaths(_ paths: Set<String>) { failingPaths = paths }
   func takeCalls() -> [String] {
     defer { calls = [] }
     return calls
@@ -317,6 +320,38 @@ private func rows(_ payload: [String: Any], _ key: String) -> [[String: Any]] {
     let payload = store.readPayload()
     #expect((payload["categories"] as? [[String: String]])?.isEmpty == true)
     #expect(store.imageAssets(for: "p1").isEmpty)
+  }
+
+  @Test func syncPullsTheManagedCategories() async throws {
+    let service = FakeLibraryService()
+    var responses = libraryResponses(possessions: lamp)
+    responses["/api/possessions/categories"] =
+      #"{"categories":[{"id":"cat1","name":"Home"},{"id":"cat2","name":"Audio"}]}"#
+    await service.setResponses(responses)
+    let store = StillLibraryStore(inMemory: true)
+
+    let payload = try await LibrarySync(service: service, store: store).sync().payload
+
+    #expect(
+      (payload["categories"] as? [[String: String]]) == [
+        ["id": "cat2", "name": "Audio"], ["id": "cat1", "name": "Home"],
+      ])
+    #expect(await service.takeCalls().contains("/api/possessions/categories"))
+  }
+
+  @Test func aMissingCategoriesEndpointKeepsTheCachedList() async throws {
+    let service = FakeLibraryService()
+    // A server without the endpoint answers 404 (or a blip drops it); the pull
+    // still succeeds and the list already on the device stays.
+    await service.setFailingPaths(["/api/possessions/categories"])
+    await service.setResponses(libraryResponses(possessions: lamp))
+    let store = StillLibraryStore(inMemory: true)
+    store.replaceCategories([(id: "cat1", name: "Home")])
+
+    let payload = try await LibrarySync(service: service, store: store).sync().payload
+
+    #expect(rows(payload, "possessions").count == 1)
+    #expect((payload["categories"] as? [[String: String]]) == [["id": "cat1", "name": "Home"]])
   }
 
   @Test func malformedResponsesThrowOther() async {

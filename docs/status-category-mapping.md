@@ -61,9 +61,10 @@ resolved to the managed record's spelling on write, so `Technology` and
   rows onto the chosen spelling (the most common casing wins).
 - `PossessionCategoryRepository.resolve` finds or creates the record on every
   write, so duplicates cannot reappear.
-- Clients may keep deriving their list from item text. The managed records are
-  the authority; exposing them to the apps (a categories endpoint, and
-  `CachedCategory` on StillCore) is stage-2 follow-up.
+- Clients read the managed records from `GET /api/possessions/categories`
+  (ordered by name). StillCore caches them in `CachedCategory` and returns them
+  with the library payload; the Mac app also falls back to the categories its
+  items use, so a client that has not pulled yet still shows something.
 
 Both land in migration `20261016160000_possession_categories.sql` (Hominem) —
 the archived backfill and the category dedup together.

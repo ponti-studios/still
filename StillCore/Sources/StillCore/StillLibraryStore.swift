@@ -578,7 +578,9 @@ public final class StillLibraryStore: @unchecked Sendable {
           ] as [String: Any]
         },
         "membership": membership,
-        "categories": categories.map { ["id": $0.id, "name": $0.name] },
+        "categories": categories
+          .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+          .map { ["id": $0.id, "name": $0.name] },
       ]
     }
   }
