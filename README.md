@@ -60,3 +60,7 @@ pnpm --filter @hominem/api exec tsx scripts/import-possessions.ts --email you@ex
 ```
 
 Re-running is safe: rows are matched on the sheet's own ids (`ITM-*`, `CON-*`).
+
+## Studio verbs
+
+Still shares one set of `just` verbs with the other studio repos (`.studio/STUDIO.md`): `just setup`, `doctor`, `run`, `sim`, `device`, `check`, `testflight`. `.studio/` is copied from the `studio-dev` repo; do not edit it here, run `just studio-update`.
