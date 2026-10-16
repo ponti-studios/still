@@ -1,5 +1,6 @@
 import Combine
 import Foundation
+import Network
 import React
 import StillCore
 import UIKit
@@ -13,10 +14,18 @@ final class StillBridge: RCTEventEmitter {
   private var account: StillAccount?
   private var subscription: AnyCancellable?
   private var observing = false
+  // Connectivity: when the network comes back, flush the outbox and refresh the
+  // screens without waiting for a launch or another edit. See docs/client-outbox.md.
+  private var pathMonitor: NWPathMonitor?
+  private let pathQueue = DispatchQueue(label: "io.ponti.still.connectivity")
+  private var wasConnected = true
+  private var foregroundObserver: NSObjectProtocol?
+  /// Serializes flushes, so a reconnect mid-sync cannot start a second one.
+  private var syncing = false
 
   @objc override static func requiresMainQueueSetup() -> Bool { true }
   override var methodQueue: DispatchQueue! { .main }
-  override func supportedEvents() -> [String]! { ["still"] }
+  override func supportedEvents() -> [String]! { ["still", "stillLibrary"] }
 
   /// The API this build talks to, so JavaScript can link out (Settings) to the same place.
   override func constantsToExport() -> [AnyHashable: Any]! {
@@ -28,13 +37,68 @@ final class StillBridge: RCTEventEmitter {
     Task { @MainActor in
       if let account = self.account { self.emit(account.state) }
     }
+    startConnectivity()
   }
 
-  override func stopObserving() { observing = false }
+  override func stopObserving() {
+    observing = false
+    stopConnectivity()
+  }
 
   private func emit(_ state: StillAccountState) {
     guard observing else { return }
     sendEvent(withName: "still", body: state.screen)
+  }
+
+  // MARK: Connectivity
+
+  /// Watches the network and the app's return to the foreground, and syncs when
+  /// either comes back. A sync flushes the outbox first, so an offline edit
+  /// converges the moment there is a connection, with no user action.
+  private func startConnectivity() {
+    guard pathMonitor == nil else { return }
+    let monitor = NWPathMonitor()
+    monitor.pathUpdateHandler = { [weak self] path in
+      Task { @MainActor in self?.connectionChanged(path.status == .satisfied) }
+    }
+    monitor.start(queue: pathQueue)
+    pathMonitor = monitor
+    foregroundObserver = NotificationCenter.default.addObserver(
+      forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main
+    ) { [weak self] _ in
+      Task { @MainActor in self?.syncAfterReconnect() }
+    }
+  }
+
+  private func stopConnectivity() {
+    pathMonitor?.cancel()
+    pathMonitor = nil
+    if let foregroundObserver { NotificationCenter.default.removeObserver(foregroundObserver) }
+    foregroundObserver = nil
+  }
+
+  @MainActor
+  private func connectionChanged(_ connected: Bool) {
+    defer { wasConnected = connected }
+    // Only act on the return of a connection; the launch sync covers the rest.
+    guard connected, !wasConnected else { return }
+    syncAfterReconnect()
+  }
+
+  /// Flushes the outbox and pulls the delta, then hands the refreshed library to
+  /// JavaScript. Silent on failure: the cache stays and the next reconnect or
+  /// launch retries.
+  @MainActor
+  private func syncAfterReconnect() {
+    guard !syncing, let account else { return }
+    syncing = true
+    Task { @MainActor in
+      defer { syncing = false }
+      guard let payload = try? await account.syncLibrary() else { return }
+      let notices = account.takeNotices()
+      guard observing else { return }
+      sendEvent(withName: "stillLibrary", body: ["library": payload, "notices": notices])
+    }
   }
 
   /// Builds the account on first use and looks up the saved session. Safe to call again.

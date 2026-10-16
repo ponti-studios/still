@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { ApiError } from './api';
 import {
   enqueueOp,
+  isLibraryPayload,
   type LibraryPayload,
   type OutboxOp,
   readLibrary,
@@ -11,6 +12,7 @@ import {
 import { fromContainer, fromPossession, toPossessionPayload } from './mapping';
 import { deleteStoredPhoto } from './photos';
 import { STATUS_PATH, type Group, type GroupKind, type Item, type ItemInput } from './types';
+import { onLibraryChanged } from '../platform/NativeStill';
 
 type State = { phase: 'loading' | 'ready' | 'error'; items: Item[]; containers: Group[]; collections: Group[]; error?: string };
 
@@ -29,6 +31,17 @@ function newId(): string {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
+/** Turns an API-shaped library into the shape the screens render. */
+function toState(lib: LibraryPayload): Pick<State, 'items' | 'containers' | 'collections'> {
+  return {
+    items: lib.possessions.map((p) => fromPossession(p, lib.membership[p.id])),
+    containers: lib.containers.map((c) => fromContainer(c, lib.containers)),
+    collections: lib.collections.map((c) => ({
+      id: c.id, name: c.name, icon: '✦', description: c.description ?? '',
+    })),
+  };
+}
+
 async function fetchAll(): Promise<Pick<State, 'items' | 'containers' | 'collections'>> {
   let lib: LibraryPayload;
   try {
@@ -44,17 +57,20 @@ async function fetchAll(): Promise<Pick<State, 'items' | 'containers' | 'collect
     }
     if (!lib.possessions.length && !lib.containers.length && !lib.collections.length) throw e;
   }
-  return {
-    items: lib.possessions.map((p) => fromPossession(p, lib.membership[p.id])),
-    containers: lib.containers.map((c) => fromContainer(c, lib.containers)),
-    collections: lib.collections.map((c) => ({ id: c.id, name: c.name, icon: '✦', description: c.description ?? '' })),
-  };
+  return toState(lib);
 }
 
 export function useStore() {
   const [state, setState] = useState<State>({ phase: 'loading', items: [], containers: [], collections: [] });
   const [notice, setNotice] = useState<string | null>(null);
 
+  // Applies a library native pushed after it synced on its own (reconnect or
+  // foreground). A payload that does not fit is ignored, like any bad event.
+  const applyLibrary = useCallback((library: unknown, notices: string[]) => {
+    if (!isLibraryPayload(library)) return;
+    setState({ phase: 'ready', ...toState(library) });
+    if (notices.length) setNotice(notices.join(' '));
+  }, []);
   const load = useCallback(async () => {
     try {
       setState({ phase: 'ready', ...(await fetchAll()) });
@@ -70,7 +86,15 @@ export function useStore() {
       // A notice is not worth failing the load over.
     }
   }, []);
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    void load();
+    // Native flushes the outbox when the network returns and pushes the result,
+    // so reconnecting needs no reopen and no retry.
+    const subscription = onLibraryChanged(({ library, notices }) => {
+      applyLibrary(library, Array.isArray(notices) ? notices : []);
+    });
+    return () => subscription?.remove();
+  }, [load, applyLibrary]);
 
   // Offline-capable: queue the ops (native applies them to the cache at once),
   // then sync. Offline the cache keeps the edits and the next sync sends them,

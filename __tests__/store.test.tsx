@@ -9,16 +9,33 @@ const mockSync = jest.fn();
 const mockRead = jest.fn();
 const mockNotices = jest.fn();
 const mockDeleteStoredPhoto = jest.fn();
+const mockOnLibraryChanged = jest.fn();
 
 jest.mock('../src/core/api', () => ({
   ApiError: jest.requireActual('../src/core/api').ApiError,
 }));
 
 jest.mock('../src/core/library', () => ({
+  isLibraryPayload: (v: unknown) => {
+    const p = v as Record<string, unknown> | null;
+    return (
+      typeof p === 'object' &&
+      p !== null &&
+      Array.isArray(p.possessions) &&
+      Array.isArray(p.containers) &&
+      Array.isArray(p.collections) &&
+      typeof p.membership === 'object' &&
+      p.membership !== null
+    );
+  },
   syncLibrary: (...args: unknown[]) => mockSync(...args),
   readLibrary: (...args: unknown[]) => mockRead(...args),
   enqueueOp: (...args: unknown[]) => mockEnqueue(...args),
   takeNotices: (...args: unknown[]) => mockNotices(...args),
+}));
+
+jest.mock('../src/platform/NativeStill', () => ({
+  onLibraryChanged: (...args: unknown[]) => mockOnLibraryChanged(...args),
 }));
 
 jest.mock('../src/core/photos', () => ({
@@ -69,10 +86,12 @@ describe('useStore', () => {
     mockRead.mockReset();
     mockNotices.mockReset();
     mockDeleteStoredPhoto.mockReset();
+    mockOnLibraryChanged.mockReset();
     mockSync.mockResolvedValue(library());
     mockRead.mockRejectedValue(new Error('no cache'));
     mockEnqueue.mockResolvedValue(library());
     mockNotices.mockResolvedValue([]);
+    mockOnLibraryChanged.mockReturnValue({ remove: jest.fn() });
   });
 
   it('loads items on mount', async () => {
@@ -187,5 +206,23 @@ describe('useStore', () => {
     });
 
     expect(mockDeleteStoredPhoto).not.toHaveBeenCalled();
+  });
+
+  it('applies a library native pushes after the network returns', async () => {
+    const seen = mount();
+    await flush();
+    const listener = mockOnLibraryChanged.mock.calls[0]?.[0] as (e: unknown) => void;
+    expect(typeof listener).toBe('function');
+
+    await ReactTestRenderer.act(async () => {
+      listener({
+        library: library({ possessions: [{ ...possession, id: 'p9', name: 'AirPods Pro 3' }] }),
+        notices: ['A change couldn’t be saved and was undone.'],
+      });
+    });
+
+    expect(seen.current?.phase).toBe('ready');
+    expect(seen.current?.items.map((i) => i.name)).toEqual(['AirPods Pro 3']);
+    expect(seen.current?.notice).toContain('couldn’t be saved');
   });
 });

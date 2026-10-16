@@ -62,6 +62,10 @@ Ops are stored in the `CachedOutboxOp` entity in the order they were made.
 7. **Offline / transient.** A network error or 5xx stops the flush with the ops
    intact and throws `noService`; the screens fall back to the cache and the
    next sync retries. No user action is needed.
+8. **Reconnect.** Native watches the network (`NWPathMonitor`) and the app's
+   return to the foreground. When a connection comes back it syncs on its own —
+   flush, then pull — and pushes the refreshed library to the screens, so a
+   queued edit lands the moment there is signal, without a reopen or a retry.
 
 ## Idempotency
 

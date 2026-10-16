@@ -39,6 +39,19 @@ const native = NativeModules.StillBridge as NativeStillApi | undefined;
 export const stillAvailable = Boolean(native);
 export const stillEvents = native ? new NativeEventEmitter(NativeModules.StillBridge) : null;
 
+/** A library native refreshed on its own, usually right after the network returned. */
+export type LibraryEvent = { library: unknown; notices: string[] };
+
+/**
+ * Subscribes to native's post-reconnect refreshes, so a queued edit appears and
+ * lands without the person reopening the app. Returns a removable subscription,
+ * or undefined where native is unavailable (tests).
+ */
+export function onLibraryChanged(listener: (event: LibraryEvent) => void) {
+  const wrapped = (event: unknown) => listener(event as LibraryEvent);
+  return stillEvents?.addListener('stillLibrary', wrapped);
+}
+
 export function NativeStill(): NativeStillApi {
   if (!native) throw new Error('Still account is unavailable. Build and run the iOS app from Xcode.');
   return native;

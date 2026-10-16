@@ -10,7 +10,7 @@ export type LibraryPayload = {
   membership: Record<string, string[]>;
 };
 
-const isLibraryPayload = (v: unknown): v is LibraryPayload => {
+export const isLibraryPayload = (v: unknown): v is LibraryPayload => {
   if (typeof v !== 'object' || v === null) return false;
   const p = v as Record<string, unknown>;
   return (
