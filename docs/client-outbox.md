@@ -70,6 +70,16 @@ always go first so its server id can be filled into the ops that follow.
    flush, then pull — and pushes the refreshed library to the screens, so a
    queued edit lands the moment there is signal, without a reopen or a retry.
 
+## Visibility
+
+The queue is not a black box. Native reports `{ pending, connected }` (bridge
+`libraryStatus`, plus a `stillStatus` event on every change and on every
+connectivity change). The screens show one quiet line — "All changes saved",
+"N changes syncing…", "N waiting — offline", or "Offline — showing saved data" —
+so "did it reach Hominem?" is answered on screen instead of guessed. For an
+authoritative check outside the app, `scripts/check-hominem.mjs` queries Hominem
+directly with an MCP token.
+
 ## Idempotency
 
 Re-sending an op must not duplicate a row. Possessions, containers and

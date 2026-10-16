@@ -5,7 +5,8 @@
   "scripts": {
     "ios": "react-native run-ios --port ${STILL_METRO_PORT:-8084} --extra-params STILL_METRO_PORT=${STILL_METRO_PORT:-8084}",
     "start": "RCT_METRO_PORT=${STILL_METRO_PORT:-8084} react-native start --port ${STILL_METRO_PORT:-8084}",
-    "test": "jest"
+    "test": "jest",
+    "check:hominem": "node scripts/check-hominem.mjs"
   },
   "dependencies": {
     "react": "19.2.3",

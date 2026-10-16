@@ -18,14 +18,15 @@ final class StillBridge: RCTEventEmitter {
   // screens without waiting for a launch or another edit. See docs/client-outbox.md.
   private var pathMonitor: NWPathMonitor?
   private let pathQueue = DispatchQueue(label: "io.ponti.still.connectivity")
-  private var wasConnected = true
+  /// Whether the network is reachable, as the last path update reported.
+  private var connected = true
   private var foregroundObserver: NSObjectProtocol?
   /// Serializes flushes, so a reconnect mid-sync cannot start a second one.
   private var syncing = false
 
   @objc override static func requiresMainQueueSetup() -> Bool { true }
   override var methodQueue: DispatchQueue! { .main }
-  override func supportedEvents() -> [String]! { ["still", "stillLibrary"] }
+  override func supportedEvents() -> [String]! { ["still", "stillLibrary", "stillStatus"] }
 
   /// The API this build talks to, so JavaScript can link out (Settings) to the same place.
   override func constantsToExport() -> [AnyHashable: Any]! {
@@ -36,6 +37,7 @@ final class StillBridge: RCTEventEmitter {
     observing = true
     Task { @MainActor in
       if let account = self.account { self.emit(account.state) }
+      self.emitStatus()
     }
     startConnectivity()
   }
@@ -48,6 +50,19 @@ final class StillBridge: RCTEventEmitter {
   private func emit(_ state: StillAccountState) {
     guard observing else { return }
     sendEvent(withName: "still", body: state.screen)
+  }
+
+  /// The sync status the screens show: how many writes are queued and whether
+  /// the network is reachable. "All saved" is then a fact, not a guess.
+  @MainActor
+  private func statusBody() -> [String: Any] {
+    ["pending": account?.pendingCount() ?? 0, "connected": connected]
+  }
+
+  @MainActor
+  private func emitStatus() {
+    guard observing else { return }
+    sendEvent(withName: "stillStatus", body: statusBody())
   }
 
   // MARK: Connectivity
@@ -78,11 +93,12 @@ final class StillBridge: RCTEventEmitter {
   }
 
   @MainActor
-  private func connectionChanged(_ connected: Bool) {
-    defer { wasConnected = connected }
-    // Only act on the return of a connection; the launch sync covers the rest.
-    guard connected, !wasConnected else { return }
-    syncAfterReconnect()
+  private func connectionChanged(_ isConnected: Bool) {
+    let regained = isConnected && !connected
+    connected = isConnected
+    emitStatus()
+    // Only sync when a connection comes back; the launch sync covers the rest.
+    if regained { syncAfterReconnect() }
   }
 
   /// Flushes the outbox and pulls the delta, then hands the refreshed library to
@@ -94,6 +110,7 @@ final class StillBridge: RCTEventEmitter {
     syncing = true
     Task { @MainActor in
       defer { syncing = false }
+      defer { emitStatus() }
       guard let payload = try? await account.syncLibrary() else { return }
       let notices = account.takeNotices()
       guard observing else { return }
@@ -270,7 +287,16 @@ final class StillBridge: RCTEventEmitter {
         return reject(StillProblem.signedOut.code, StillProblem.signedOut.message, nil)
       }
       resolve(account.enqueue(entity: entity, kind: kind, entityId: entityId, payload: payload))
+      self.emitStatus()
     }
+  }
+
+  /// The current sync status: how many writes are queued and whether the network
+  /// is reachable. The screens read this on launch and after every change.
+  @objc func libraryStatus(
+    _ resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock
+  ) {
+    Task { @MainActor in resolve(self.statusBody()) }
   }
 
   /// Notices raised since the last call (e.g. a rolled-back edit). Resolves with

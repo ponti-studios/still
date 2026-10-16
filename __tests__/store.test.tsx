@@ -10,6 +10,8 @@ const mockRead = jest.fn();
 const mockNotices = jest.fn();
 const mockDeleteStoredPhoto = jest.fn();
 const mockOnLibraryChanged = jest.fn();
+const mockOnStatusChanged = jest.fn();
+const mockLibraryStatus = jest.fn();
 
 jest.mock('../src/core/api', () => ({
   ApiError: jest.requireActual('../src/core/api').ApiError,
@@ -36,6 +38,8 @@ jest.mock('../src/core/library', () => ({
 
 jest.mock('../src/platform/NativeStill', () => ({
   onLibraryChanged: (...args: unknown[]) => mockOnLibraryChanged(...args),
+  onStatusChanged: (...args: unknown[]) => mockOnStatusChanged(...args),
+  libraryStatus: (...args: unknown[]) => mockLibraryStatus(...args),
 }));
 
 jest.mock('../src/core/photos', () => ({
@@ -87,11 +91,15 @@ describe('useStore', () => {
     mockNotices.mockReset();
     mockDeleteStoredPhoto.mockReset();
     mockOnLibraryChanged.mockReset();
+    mockOnStatusChanged.mockReset();
+    mockLibraryStatus.mockReset();
     mockSync.mockResolvedValue(library());
     mockRead.mockRejectedValue(new Error('no cache'));
     mockEnqueue.mockResolvedValue(library());
     mockNotices.mockResolvedValue([]);
     mockOnLibraryChanged.mockReturnValue({ remove: jest.fn() });
+    mockOnStatusChanged.mockReturnValue({ remove: jest.fn() });
+    mockLibraryStatus.mockResolvedValue({ pending: 0, connected: true });
   });
 
   it('loads items on mount', async () => {
@@ -224,5 +232,20 @@ describe('useStore', () => {
     expect(seen.current?.phase).toBe('ready');
     expect(seen.current?.items.map((i) => i.name)).toEqual(['AirPods Pro 3']);
     expect(seen.current?.notice).toContain('couldn’t be saved');
+  });
+
+  it('reports how many changes are still queued and whether it is online', async () => {
+    mockLibraryStatus.mockResolvedValue({ pending: 3, connected: false });
+    const seen = mount();
+    await flush();
+    expect(seen.current?.pending).toBe(3);
+    expect(seen.current?.connected).toBe(false);
+
+    const listener = mockOnStatusChanged.mock.calls[0]?.[0] as (s: unknown) => void;
+    await ReactTestRenderer.act(async () => {
+      listener({ pending: 0, connected: true });
+    });
+    expect(seen.current?.pending).toBe(0);
+    expect(seen.current?.connected).toBe(true);
   });
 });

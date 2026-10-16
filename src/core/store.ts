@@ -12,7 +12,7 @@ import {
 import { fromContainer, fromPossession, toPossessionPayload } from './mapping';
 import { deleteStoredPhoto } from './photos';
 import { STATUS_PATH, type Group, type GroupKind, type Item, type ItemInput } from './types';
-import { onLibraryChanged } from '../platform/NativeStill';
+import { onLibraryChanged, onStatusChanged, libraryStatus } from '../platform/NativeStill';
 
 type State = { phase: 'loading' | 'ready' | 'error'; items: Item[]; containers: Group[]; collections: Group[]; error?: string };
 
@@ -63,6 +63,9 @@ async function fetchAll(): Promise<Pick<State, 'items' | 'containers' | 'collect
 export function useStore() {
   const [state, setState] = useState<State>({ phase: 'loading', items: [], containers: [], collections: [] });
   const [notice, setNotice] = useState<string | null>(null);
+  // Sync status: how many writes are still queued, and whether we are online.
+  const [pending, setPending] = useState(0);
+  const [connected, setConnected] = useState(true);
 
   // Applies a library native pushed after it synced on its own (reconnect or
   // foreground). A payload that does not fit is ignored, like any bad event.
@@ -90,10 +93,20 @@ export function useStore() {
     void load();
     // Native flushes the outbox when the network returns and pushes the result,
     // so reconnecting needs no reopen and no retry.
-    const subscription = onLibraryChanged(({ library, notices }) => {
+    const librarySub = onLibraryChanged(({ library, notices }) => {
       applyLibrary(library, Array.isArray(notices) ? notices : []);
     });
-    return () => subscription?.remove();
+    // Sync status: read once, then follow native's updates.
+    const applyStatus = (status: { pending?: unknown; connected?: unknown }) => {
+      setPending(typeof status.pending === 'number' ? status.pending : 0);
+      setConnected(status.connected !== false);
+    };
+    const statusSub = onStatusChanged(applyStatus);
+    void libraryStatus().then(applyStatus);
+    return () => {
+      librarySub?.remove();
+      statusSub?.remove();
+    };
   }, [load, applyLibrary]);
 
   // Offline-capable: queue the ops (native applies them to the cache at once),
@@ -126,6 +139,8 @@ export function useStore() {
   return {
     ...state,
     notice,
+    pending,
+    connected,
     dismissNotice: () => setNotice(null),
     reload: load,
 

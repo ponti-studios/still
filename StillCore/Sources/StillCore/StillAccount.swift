@@ -183,6 +183,9 @@ public final class StillAccount: ObservableObject {
     return notices
   }
 
+  /// How many writes are queued but not yet confirmed by Hominem.
+  public func pendingCount() -> Int { library.pendingCount() }
+
   /// The cached library, API-shaped, without touching the network. Empty lists when
   /// nothing is cached yet.
   public func readLibrary() -> [String: Any] {

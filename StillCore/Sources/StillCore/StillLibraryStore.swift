@@ -742,6 +742,15 @@ extension StillLibraryStore {
     }
   }
 
+  /// How many writes are still queued. Zero means everything the person did has
+  /// reached Hominem; the screens show this so "pushed" is visible, not guessed.
+  public func pendingCount() -> Int {
+    container.viewContext.performAndWait {
+      let request = NSFetchRequest<CachedOutboxOp>(entityName: "CachedOutboxOp")
+      return (try? container.viewContext.count(for: request)) ?? 0
+    }
+  }
+
   public func removeOp(id: String) {
     let background = container.newBackgroundContext()
     background.performAndWait {
