@@ -82,6 +82,30 @@ public final class CachedImageAsset: NSManagedObject {
   @NSManaged public var originalFilename: String?
 }
 
+/// A photo manifest entry crossing the store boundary. Value type, so the
+/// React Native bridge and the photo sync pass it without touching Core Data.
+public struct CachedImageAssetInput: Sendable, Equatable {
+  public var id: String
+  public var possessionId: String
+  public var sha256: String?
+  public var filename: String?
+  public var displayOrder: Int64
+  public var altText: String?
+  public var originalFilename: String?
+
+  public init(
+    id: String, possessionId: String, sha256: String? = nil, filename: String? = nil,
+    displayOrder: Int64 = 0, altText: String? = nil, originalFilename: String? = nil
+  ) {
+    self.id = id
+    self.possessionId = possessionId
+    self.sha256 = sha256
+    self.filename = filename
+    self.displayOrder = displayOrder
+    self.altText = altText
+    self.originalFilename = originalFilename
+  }
+}
 /// The shipped v1 model, frozen. Do not edit: the migrator diffs real user
 /// stores against exactly this shape, and `StillLibraryModelTests` enforces it.
 enum StillLibraryModelV1 {
@@ -374,11 +398,13 @@ public final class StillLibraryStore: @unchecked Sendable {
 
   /// The payload shape, with empty lists: what reads resolve before the first sync.
   public static let emptyPayload: [String: Any] = [
-    "possessions": [], "containers": [], "collections": [], "membership": [:] as [String: [String]],
+    "possessions": [], "containers": [], "collections": [],
+    "membership": [:] as [String: [String]], "categories": [],
   ]
 
   /// Replaces the whole cache with fresh API JSON. Volumes are small; wipe-and-fill
-  /// cannot leave a deleted row behind.
+  /// cannot leave a deleted row behind. Photo manifest and categories have their
+  /// own lifecycle (see `replaceImageManifest`): this leaves them untouched.
   public func replaceAll(
     possessions: [[String: Any]], containers: [[String: Any]], collections: [[String: Any]],
     membership: [(collectionId: String, entityId: String)]
@@ -399,6 +425,20 @@ public final class StillLibraryStore: @unchecked Sendable {
         row.containerId = json.string("containerId")
         row.metadata = json.text("metadata")
         row.createdAt = json.string("createdAt") ?? ""
+        row.brand = json.string("brand")
+        row.model = json.string("model")
+        row.subCategory = json.string("subCategory")
+        row.url = json.string("url")
+        row.notes = json.string("notes")
+        row.serialNumber = json.string("serialNumber")
+        row.size = json.string("size")
+        row.color = json.string("color")
+        row.placement = json.string("placement")
+        row.categoryId = json.string("categoryId")
+        row.retiredDate = json.string("retiredDate")
+        row.sellPriceCents = json.int("sellPriceCents")
+        row.updatedAt = json.string("updatedAt")
+        row.deletedAt = json.string("deletedAt")
       }
       for json in containers {
         let row = CachedContainer(context: background)
@@ -408,12 +448,16 @@ public final class StillLibraryStore: @unchecked Sendable {
         row.parentContainerId = json.string("parentContainerId")
         row.desc = json.string("description")
         row.metadata = json.text("metadata")
+        row.updatedAt = json.string("updatedAt")
+        row.deletedAt = json.string("deletedAt")
       }
       for json in collections {
         let row = CachedCollection(context: background)
         row.id = json.string("id") ?? ""
         row.name = json.string("name") ?? ""
         row.desc = json.string("description")
+        row.updatedAt = json.string("updatedAt")
+        row.deletedAt = json.string("deletedAt")
       }
       for link in membership {
         let row = CachedMembership(context: background)
@@ -425,7 +469,10 @@ public final class StillLibraryStore: @unchecked Sendable {
   }
 
   /// The cache as API-shaped JSON: possessions, containers, collections, and
-  /// membership as possession id to collection ids. No network.
+  /// membership as possession id to collection ids. No network. Tombstoned
+  /// rows (`deletedAt` set) are hidden here but stay in the store for the
+  /// outbox to reference. New keys are additive: the React Native screens
+  /// ignore what they do not know.
   public func readPayload() -> [String: Any] {
     container.viewContext.performAndWait {
       let possessions: [CachedPossession] = (try? container.viewContext.fetch(
@@ -436,12 +483,14 @@ public final class StillLibraryStore: @unchecked Sendable {
         NSFetchRequest<CachedCollection>(entityName: "CachedCollection"))) ?? []
       let links: [CachedMembership] = (try? container.viewContext.fetch(
         NSFetchRequest<CachedMembership>(entityName: "CachedMembership"))) ?? []
+      let categories: [CachedCategory] = (try? container.viewContext.fetch(
+        NSFetchRequest<CachedCategory>(entityName: "CachedCategory"))) ?? []
       var membership: [String: [String]] = [:]
       for link in links {
         membership[link.entityId, default: []].append(link.collectionId)
       }
       return [
-        "possessions": possessions.map {
+        "possessions": possessions.filter { $0.deletedAt == nil }.map {
           [
             "id": $0.id, "name": $0.name,
             "category": $0.category ?? NSNull(),
@@ -453,22 +502,104 @@ public final class StillLibraryStore: @unchecked Sendable {
             "containerId": $0.containerId ?? NSNull(),
             "metadata": $0.metadataObject,
             "createdAt": $0.createdAt,
+            "brand": $0.brand ?? NSNull(),
+            "model": $0.model ?? NSNull(),
+            "subCategory": $0.subCategory ?? NSNull(),
+            "url": $0.url ?? NSNull(),
+            "notes": $0.notes ?? NSNull(),
+            "serialNumber": $0.serialNumber ?? NSNull(),
+            "size": $0.size ?? NSNull(),
+            "color": $0.color ?? NSNull(),
+            "placement": $0.placement ?? NSNull(),
+            "categoryId": $0.categoryId ?? NSNull(),
+            "retiredDate": $0.retiredDate ?? NSNull(),
+            "sellPriceCents": $0.sellPriceCents,
+            "updatedAt": $0.updatedAt ?? NSNull(),
           ] as [String: Any]
         },
-        "containers": containers.map {
+        "containers": containers.filter { $0.deletedAt == nil }.map {
           [
             "id": $0.id, "name": $0.name,
             "containerType": $0.containerType ?? NSNull(),
             "parentContainerId": $0.parentContainerId ?? NSNull(),
             "description": $0.desc ?? NSNull(),
             "metadata": $0.metadataObject,
+            "updatedAt": $0.updatedAt ?? NSNull(),
           ] as [String: Any]
         },
-        "collections": collections.map {
-          ["id": $0.id, "name": $0.name, "description": $0.desc ?? NSNull()] as [String: Any]
+        "collections": collections.filter { $0.deletedAt == nil }.map {
+          [
+            "id": $0.id, "name": $0.name, "description": $0.desc ?? NSNull(),
+            "updatedAt": $0.updatedAt ?? NSNull(),
+          ] as [String: Any]
         },
         "membership": membership,
+        "categories": categories.map { ["id": $0.id, "name": $0.name] },
       ]
+    }
+  }
+
+  /// Replaces the managed-category table. Categories arrive via the stage-2
+  /// convergence, not the library sync, hence the separate lifecycle.
+  public func replaceCategories(_ categories: [(id: String, name: String)]) {
+    let background = container.newBackgroundContext()
+    background.performAndWait {
+      let fetch = NSFetchRequest<NSManagedObject>(entityName: "CachedCategory")
+      fetch.includesPropertyValues = false
+      for object in (try? background.fetch(fetch)) ?? [] {
+        background.delete(object)
+      }
+      for category in categories {
+        let row = CachedCategory(context: background)
+        row.id = category.id
+        row.name = category.name
+      }
+      _ = try? background.save()
+    }
+  }
+
+  /// Replaces the photo manifest. Bytes live in iCloud; this table is the
+  /// Hominem-carried index. The photo sync refills it atomically with each
+  /// sync, so `replaceAll` never touches these rows.
+  public func replaceImageManifest(_ assets: [CachedImageAssetInput]) {
+    let background = container.newBackgroundContext()
+    background.performAndWait {
+      let fetch = NSFetchRequest<NSManagedObject>(entityName: "CachedImageAsset")
+      fetch.includesPropertyValues = false
+      for object in (try? background.fetch(fetch)) ?? [] {
+        background.delete(object)
+      }
+      for asset in assets {
+        let row = CachedImageAsset(context: background)
+        row.id = asset.id
+        row.possessionId = asset.possessionId
+        row.sha256 = asset.sha256
+        row.filename = asset.filename
+        row.displayOrder = asset.displayOrder
+        row.altText = asset.altText
+        row.originalFilename = asset.originalFilename
+      }
+      _ = try? background.save()
+    }
+  }
+
+  /// A possession's manifest, oldest display order first. Missing files render
+  /// the emoji fallback; this index never throws.
+  public func imageAssets(for possessionId: String) -> [CachedImageAssetInput] {
+    container.viewContext.performAndWait {
+      let request = NSFetchRequest<CachedImageAsset>(entityName: "CachedImageAsset")
+      request.predicate = NSPredicate(format: "possessionId == %@", possessionId)
+      request.sortDescriptors = [
+        NSSortDescriptor(key: "displayOrder", ascending: true),
+        NSSortDescriptor(key: "id", ascending: true),
+      ]
+      let rows = (try? container.viewContext.fetch(request)) ?? []
+      return rows.map {
+        CachedImageAssetInput(
+          id: $0.id, possessionId: $0.possessionId, sha256: $0.sha256,
+          filename: $0.filename, displayOrder: $0.displayOrder, altText: $0.altText,
+          originalFilename: $0.originalFilename)
+      }
     }
   }
 
@@ -476,13 +607,29 @@ public final class StillLibraryStore: @unchecked Sendable {
   public func clear() {
     let background = container.newBackgroundContext()
     background.performAndWait {
-      Self.wipe(background)
+      Self.wipeAll(background)
       _ = try? background.save()
     }
   }
 
-  /// Deletes every cached row. Fetch-and-delete, not batch: batch requests only
-  /// work on SQLite stores, and tests run in memory.
+  /// Deletes every cached row, including the photo manifest and categories.
+  /// Photo files on disk become orphans here; the photo sync collects them.
+  private static func wipeAll(_ context: NSManagedObjectContext) {
+    for name in [
+      "CachedPossession", "CachedContainer", "CachedCollection", "CachedMembership",
+      "CachedCategory", "CachedImageAsset",
+    ] {
+      let fetch = NSFetchRequest<NSManagedObject>(entityName: name)
+      fetch.includesPropertyValues = false
+      for object in (try? context.fetch(fetch)) ?? [] {
+        context.delete(object)
+      }
+    }
+  }
+
+  /// Deletes the sync-owned rows. Fetch-and-delete, not batch: batch requests only
+  /// work on SQLite stores, and tests run in memory. Assets and categories keep
+  /// their own lifecycle and survive a sync refill.
   private static func wipe(_ context: NSManagedObjectContext) {
     for name in ["CachedPossession", "CachedContainer", "CachedCollection", "CachedMembership"] {
       let fetch = NSFetchRequest<NSManagedObject>(entityName: name)

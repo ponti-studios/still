@@ -215,6 +215,93 @@ private func rows(_ payload: [String: Any], _ key: String) -> [[String: Any]] {
     #expect(isV2Store(at: url))
   }
 
+  @Test func replaceAllPersistsRichFields() {
+    let store = StillLibraryStore(inMemory: true)
+    store.replaceAll(
+      possessions: [[
+        "id": "p1", "name": "Lamp", "brand": "Ikea", "model": "HEJ",
+        "subCategory": "desk", "url": "https://example.com/lamp",
+        "notes": "warm bulb", "serialNumber": "SN-1", "size": "M", "color": "white",
+        "placement": "study", "categoryId": "cat1", "retiredDate": "2025-02-01",
+        "sellPriceCents": 500, "updatedAt": "2025-03-01T00:00:00Z",
+        "metadata": [:] as [String: Any], "createdAt": "2025-01-10T00:00:00Z",
+      ]],
+      containers: [
+        ["id": "box", "name": "Box", "metadata": [:] as [String: Any],
+         "updatedAt": "2025-03-02T00:00:00Z"]
+      ],
+      collections: [
+        ["id": "c1", "name": "Keep", "updatedAt": "2025-03-03T00:00:00Z"]
+      ],
+      membership: [])
+
+    let payload = store.readPayload()
+    let possession = rows(payload, "possessions").first
+    #expect(possession?["brand"] as? String == "Ikea")
+    #expect(possession?["model"] as? String == "HEJ")
+    #expect(possession?["subCategory"] as? String == "desk")
+    #expect(possession?["url"] as? String == "https://example.com/lamp")
+    #expect(possession?["serialNumber"] as? String == "SN-1")
+    #expect(possession?["sellPriceCents"] as? Int64 == 500)
+    #expect(possession?["categoryId"] as? String == "cat1")
+    #expect(possession?["updatedAt"] as? String == "2025-03-01T00:00:00Z")
+    let container = rows(payload, "containers").first
+    #expect(container?["updatedAt"] as? String == "2025-03-02T00:00:00Z")
+    let collection = rows(payload, "collections").first
+    #expect(collection?["updatedAt"] as? String == "2025-03-03T00:00:00Z")
+  }
+
+  @Test func tombstonedRowsStayStoredButHidden() {
+    let store = StillLibraryStore(inMemory: true)
+    store.replaceAll(
+      possessions: [
+        ["id": "gone", "name": "Gone", "metadata": [:] as [String: Any],
+         "createdAt": "2025-01-10T00:00:00Z", "deletedAt": "2025-04-01T00:00:00Z"],
+        ["id": "kept", "name": "Kept", "metadata": [:] as [String: Any],
+         "createdAt": "2025-01-10T00:00:00Z"],
+      ],
+      containers: [], collections: [], membership: [])
+
+    let names = rows(store.readPayload(), "possessions").compactMap { $0["name"] as? String }
+    #expect(names == ["Kept"])
+  }
+
+  @Test func syncRefillPreservesAssetsAndCategories() {
+    let store = StillLibraryStore(inMemory: true)
+    store.replaceCategories([(id: "cat1", name: "Home")])
+    store.replaceImageManifest([
+      CachedImageAssetInput(
+        id: "a2", possessionId: "p1", sha256: "b", displayOrder: 1),
+      CachedImageAssetInput(
+        id: "a1", possessionId: "p1", sha256: "a", displayOrder: 0),
+    ])
+    store.replaceAll(
+      possessions: [
+        ["id": "p1", "name": "Lamp", "metadata": [:] as [String: Any],
+         "createdAt": "2025-01-10T00:00:00Z"]
+      ],
+      containers: [], collections: [], membership: [])
+
+    let payload = store.readPayload()
+    #expect((payload["categories"] as? [[String: String]]) == [["id": "cat1", "name": "Home"]])
+    #expect(store.imageAssets(for: "p1").map(\.id) == ["a1", "a2"])
+    #expect(store.imageAssets(for: "other").isEmpty)
+  }
+
+  @Test func clearRemovesAssetsAndCategoriesToo() {
+    let store = StillLibraryStore(inMemory: true)
+    store.replaceCategories([(id: "cat1", name: "Home")])
+    store.replaceImageManifest([
+      CachedImageAssetInput(id: "a1", possessionId: "p1", sha256: "a"),
+    ])
+
+    store.clear()
+
+    let payload = store.readPayload()
+    #expect((payload["categories"] as? [[String: String]])?.isEmpty == true)
+    #expect(store.imageAssets(for: "p1").isEmpty)
+  }
+
   @Test func malformedResponsesThrowOther() async {
     let service = FakeLibraryService()
     await service.setResponses([:])
