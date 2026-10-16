@@ -23,7 +23,7 @@ struct PossessionCard: View {
             }
 
             HStack {
-                StatusBadge(status: possession.statusValue)
+                StatusBadge(status: possession.isArchived ? nil : possession.statusValue)
                 Spacer()
                 if let price = possession.priceValue {
                     Text(price, format: .currency(code: "USD"))
@@ -107,7 +107,7 @@ struct StatusBadge: View {
             .padding(.vertical, 4)
             .background(statusColor(for: status).opacity(0.15), in: Capsule())
         } else {
-            Text("No Status")
+            Text("Archived")
                 .font(.caption2.weight(.medium))
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 8)
@@ -118,11 +118,11 @@ struct StatusBadge: View {
 
     private func statusColor(for status: Status) -> Color {
         switch status {
-        case .inUse: return .green
+        case .wanted: return .yellow
+        case .planned: return .blue
+        case .ordered: return .orange
+        case .delivered: return .teal
         case .owned: return .blue
-        case .wishlist: return .orange
-        case .disposed: return .red
-        case .retired: return .purple
         }
     }
 }

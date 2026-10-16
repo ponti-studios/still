@@ -2,6 +2,7 @@ import Foundation
 import Observation
 import AppKit
 import StillMacCore
+import StillCore
 
 /// Disambiguates our managed category record from Foundation's `Category`
 /// (file-type category), which is also visible through SwiftUI/AppKit.
@@ -42,13 +43,52 @@ enum PossessionRoute: Identifiable {
     }
 }
 
+/// How the library is getting on with Hominem, in the words the footer shows.
+/// Same vocabulary as the iOS app.
+enum SyncStatus: Equatable {
+    case idle
+    case saved
+    case syncing(Int)
+    case waiting(Int)
+    case offline
+
+    var label: String {
+        switch self {
+        case .idle: return ""
+        case .saved: return "All changes saved"
+        case .syncing(let count): return count > 0 ? "\(count) change\(count == 1 ? "" : "s") syncing…" : "Syncing…"
+        case .waiting(let count): return "\(count) waiting — offline"
+        case .offline: return "Offline — showing saved data"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .idle: return "circle"
+        case .saved: return "checkmark.circle"
+        case .syncing: return "arrow.triangle.2.circlepath"
+        case .waiting, .offline: return "exclamationmark.icloud"
+        }
+    }
+
+    var isBusy: Bool {
+        if case .syncing = self { return true }
+        return false
+    }
+}
+
+/// The Mac library, read from and written through the shared StillCore cache and
+/// outbox. Hominem is the source of truth: reads render the cache, writes queue
+/// an op and apply it locally at once, and a sync sends the queue and pulls the
+/// delta. The SQLite database is no longer written at runtime (the one-way
+/// importer still reads it).
 @MainActor
 @Observable
 final class PossessionsStore {
-    var databaseURL: URL?
     private(set) var possessions: [Possession] = []
     private(set) var managedCategories: [Category] = []
     private(set) var selectedID: String?
+    private(set) var syncStatus: SyncStatus = .idle
 
     var searchText = ""
     var statusFilter: Status? = nil
@@ -58,10 +98,25 @@ final class PossessionsStore {
     var sortAscending = true
 
     var errorMessage: String?
-    var isOpen = false
-    var lastBackupURL: URL?
+    var notice: String?
     var inlineEditingID: String?
     var route: PossessionRoute?
+
+    /// The alert shows a failure if there is one, otherwise the calm notice.
+    var alertMessage: String? { errorMessage ?? notice }
+
+    private let account: StillAccount
+    private var isSyncing = false
+    private var needsAnotherSync = false
+
+    init(account: StillAccount) {
+        self.account = account
+    }
+
+    func clearAlert() {
+        errorMessage = nil
+        notice = nil
+    }
 
     func beginEditing(_ possession: Possession) {
         route = .new(possession)
@@ -95,9 +150,6 @@ final class PossessionsStore {
         selectedID = nil
     }
 
-    private var repository: PossessionsRepository?
-    private var backedUpThisSession = false
-
     var selectedPossession: Possession? {
         guard let selectedID else { return nil }
         return possessions.first { $0.id == selectedID }
@@ -109,8 +161,8 @@ final class PossessionsStore {
 
     var statusCounts: [(Status, Int)] {
         var counts: [Status: Int] = [:]
-        for p in possessions {
-            if let raw = p.status, let status = Status(rawValue: raw) {
+        for p in possessions where !p.isArchived {
+            if let status = p.statusValue {
                 counts[status, default: 0] += 1
             }
         }
@@ -132,7 +184,7 @@ final class PossessionsStore {
         var result = possessions
 
         if let statusFilter {
-            result = result.filter { $0.status == statusFilter.rawValue }
+            result = result.filter { !$0.isArchived && $0.status == statusFilter.rawValue }
         }
         if let archiveFilter {
             result = result.filter { $0.isArchived == archiveFilter }
@@ -159,8 +211,7 @@ final class PossessionsStore {
             case .acquiredDate:
                 comparison = compare((lhs.acquiredDate, lhs.name), (rhs.acquiredDate, rhs.name))
             case .daysOwned:
-                let l = Int(lhs.daysOwned) ?? Int(lhs.daysOwned.replacingOccurrences(of: ",", with: "")) ?? 0
-                let r = Int(rhs.daysOwned) ?? Int(rhs.daysOwned.replacingOccurrences(of: ",", with: "")) ?? 0
+                let l = lhs.daysOwnedValue ?? -1, r = rhs.daysOwnedValue ?? -1
                 comparison = l == r ? lhs.name.localizedCaseInsensitiveCompare(rhs.name) : (l < r ? .orderedAscending : .orderedDescending)
             case .price:
                 let l = lhs.priceValue ?? -1, r = rhs.priceValue ?? -1
@@ -179,51 +230,81 @@ final class PossessionsStore {
         return first == .orderedSame ? lhs.1.localizedCaseInsensitiveCompare(rhs.1) : first
     }
 
-    // MARK: - Database lifecycle
+    // MARK: - Library
 
-    func open(url: URL) throws {
-        do {
-            let db = try SQLiteDatabase(path: url.path)
-            guard try db.hasTable("possessions") else {
-                throw DatabaseError.schemaMissing
-            }
-            let candidateRepository = PossessionsRepository(db: db)
-            try candidateRepository.migrateSchema()
-            try candidateRepository.validateSchema()
-            repository = candidateRepository
-            databaseURL = url
-            isOpen = true
-            backedUpThisSession = false
-            try reload()
-            errorMessage = nil
-        } catch {
-            errorMessage = "Could not open \(url.lastPathComponent): \(error.localizedDescription)"
-            throw error
-        }
-    }
-
-    func openNewDatabase(url: URL) throws {
-        let db = try SQLiteDatabase(path: url.path)
-        let newRepository = PossessionsRepository(db: db)
-        try newRepository.createEmptySchema()
-        repository = newRepository
-        databaseURL = url
-        isOpen = true
-        backedUpThisSession = false
-        try reload()
-        errorMessage = nil
-    }
-
-    func reload() throws {
-        guard let repository else { return }
-        possessions = try repository.fetchAll()
-        managedCategories = try repository.fetchCategories()
+    /// Renders the cached library without touching the network.
+    func reload() {
+        let payload = account.readLibrary()
+        possessions = (payload["possessions"] as? [[String: Any]] ?? [])
+            .map(PossessionCache.possession(from:))
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        let managed = PossessionCache.categories(from: payload)
+        // Until the categories endpoint lands, the sidebar shows what the items use.
+        managedCategories = managed.isEmpty ? PossessionCache.categories(inUse: possessions) : managed
         if let selectedID, !possessions.contains(where: { $0.id == selectedID }) {
             self.selectedID = nil
         }
         if let inlineEditingID, !possessions.contains(where: { $0.id == inlineEditingID }) {
             self.inlineEditingID = nil
         }
+    }
+
+    /// Empties the library on sign out, so nothing of the previous account lingers.
+    func reset() {
+        possessions = []
+        managedCategories = []
+        selectedID = nil
+        inlineEditingID = nil
+        route = nil
+        syncStatus = .idle
+    }
+
+    /// Flushes the outbox and pulls the delta, then renders the cache. Offline is
+    /// an ordinary answer: the queue is kept and the cache still shows. An edit
+    /// made while a sync is running sets a flag and is picked up in the same call,
+    /// so nothing waits for the next sync point.
+    func refresh() async {
+        guard account.state.email != nil else {
+            reset()
+            return
+        }
+        if isSyncing {
+            needsAnotherSync = true
+            return
+        }
+        isSyncing = true
+        syncStatus = .syncing(account.pendingCount())
+        var passes = 0
+        repeat {
+            needsAnotherSync = false
+            await performSync()
+            passes += 1
+        } while needsAnotherSync && passes < 3
+        isSyncing = false
+    }
+
+    private func performSync() async {
+        do {
+            _ = try await account.syncLibrary()
+            reload()
+            errorMessage = nil
+            let notices = account.takeNotices()
+            if !notices.isEmpty { notice = notices.joined(separator: "\n") }
+            let pending = account.pendingCount()
+            syncStatus = pending > 0 ? .syncing(pending) : .saved
+        } catch {
+            reload()
+            let pending = account.pendingCount()
+            syncStatus = pending > 0 ? .waiting(pending) : .offline
+            if (error as? StillProblem) == .signedOut {
+                reset()
+            }
+        }
+    }
+
+    /// The primary "sync now" action (⌘R).
+    func syncNow() {
+        Task { await refresh() }
     }
 
     func select(_ possession: Possession?) {
@@ -238,52 +319,32 @@ final class PossessionsStore {
         Possession(id: UUIDv7.generate())
     }
 
-    // MARK: - Mutations (with automatic backup before first write per session)
+    // MARK: - Mutations (queued through the shared outbox)
 
-    private func backupIfNeeded() throws {
-        guard !backedUpThisSession, let databaseURL else { return }
-        let url = try BackupManager.snapshot(databaseURL: databaseURL)
-        lastBackupURL = url
-        backedUpThisSession = true
-    }
-
+    /// Queues a create or an update and applies it to the cache at once, so the
+    /// edit shows even offline. Throws only when the edit itself cannot be built
+    /// (bad metadata JSON); a network problem is not a save failure.
     func save(_ possession: Possession) throws {
-        guard let repository else { throw DatabaseError.schemaMissing }
-        do {
-            try backupIfNeeded()
-            try repository.upsert(possession)
-            try reload()
-            errorMessage = nil
-        } catch {
-            errorMessage = error.localizedDescription
-            throw error
-        }
+        let payload = try PossessionCache.writePayload(for: possession)
+        let exists = possessions.contains { $0.id == possession.id }
+        _ = account.enqueue(
+            entity: "possession",
+            kind: exists ? "update" : "create",
+            entityId: possession.id,
+            payload: Self.json(payload))
+        reload()
+        errorMessage = nil
+        syncNow()
     }
 
     func delete(_ possession: Possession) throws {
-        guard let repository else { throw DatabaseError.schemaMissing }
-        do {
-            try backupIfNeeded()
-            try repository.delete(id: possession.id)
-            if selectedID == possession.id { selectedID = nil }
-            if inlineEditingID == possession.id { inlineEditingID = nil }
-            try reload()
-            errorMessage = nil
-        } catch {
-            errorMessage = error.localizedDescription
-            throw error
-        }
-    }
-
-    func manualBackup() {
-        guard let databaseURL else { return }
-        do {
-            let url = try BackupManager.snapshot(databaseURL: databaseURL)
-            lastBackupURL = url
-            errorMessage = nil
-        } catch {
-            errorMessage = "Backup failed: \(error.localizedDescription)"
-        }
+        _ = account.enqueue(
+            entity: "possession", kind: "delete", entityId: possession.id, payload: "{}")
+        if selectedID == possession.id { selectedID = nil }
+        if inlineEditingID == possession.id { inlineEditingID = nil }
+        reload()
+        errorMessage = nil
+        syncNow()
     }
 
     func addImage(to possessionID: String, from sourceURL: URL) throws {
@@ -325,5 +386,12 @@ final class PossessionsStore {
         updated.imageUrl = updated.imagePaths.filter { $0 != path }.joined(separator: ", ")
         try save(updated)
         try ImageStore.removeImage(at: path, for: possession.id)
+    }
+
+    private static func json(_ payload: [String: Any]) -> String {
+        guard let data = try? JSONSerialization.data(
+            withJSONObject: payload, options: [.withoutEscapingSlashes])
+        else { return "{}" }
+        return String(data: data, encoding: .utf8) ?? "{}"
     }
 }

@@ -141,7 +141,7 @@ struct PossessionsListView: View {
                 Text(p.brand).foregroundStyle(.secondary).lineLimit(1)
             }
             TableColumn("Status") { p in
-                StatusBadge(status: p.statusValue)
+                StatusBadge(status: p.isArchived ? nil : p.statusValue)
             }
             TableColumn("Acquired") { p in
                 Text(p.acquiredDate).foregroundStyle(.secondary)

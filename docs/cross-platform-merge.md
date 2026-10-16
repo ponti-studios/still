@@ -38,6 +38,7 @@ until marked Accepted.
 | 9 | Stage-2 boundary | Accepted 2026-10-15 | Through Mac convergence (Possessions on StillCore + one-way SQLite importer); SwiftUI iOS rewrite stays deferred and out of scope |
 | 10 | Photo roaming | Accepted 2026-10-15 | Local-first files (`Still/Photos/<possession-id>/<sha256>.jpg`), Hominem manifest for order, lazy download, tombstone delete with GC; iCloud-off stays local-capable with a notice; no Hominem photo bytes, no thumbnail pipeline |
 | 11 | Mac app home | Accepted 2026-10-16 | Possessions moves into the Still repo at `macos/` — one SwiftPM package renamed `Still`, beside the shared `StillCore`, so the two apps share code in one place. Its own domain target (`StillMacCore`) retires in favour of `StillCore` in task 008 |
+| 12 | Mac runtime backup | Accepted 2026-10-16 | The Mac app stops writing SQLite at runtime (task 008), so the session backup-before-first-write no longer protects anything: it is removed. The one-way importer (task 009) takes the pre-import backup and quarantines invalid rows. Recorded in `docs/stillcore-adoption.md` |
 
 ## Goals
 

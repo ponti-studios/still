@@ -30,9 +30,12 @@ Sources/
     └── Views/         #   RootView, sidebar, list, detail, editor …
 ```
 
-`StillMacCore` is the Mac app's own domain layer for now. The cross-platform
-merge retires it in favour of the shared [`../StillCore`](../StillCore) library,
-which owns the Core Data cache and the Hominem sync engine — see
+`StillMacCore` holds the view model (`Possession`), the cache mapping
+(`PossessionCache`), and the pieces the one-way SQLite importer still needs
+(`SQLiteDatabase`, `PossessionsRepository`, `ImageStore`, `BackupManager`). It
+no longer owns persistence: the cache and the sync engine are
+[`../StillCore`](../StillCore), and Hominem is the source of truth — see
+[`../docs/stillcore-adoption.md`](../docs/stillcore-adoption.md) and
 [`../docs/cross-platform-merge.md`](../docs/cross-platform-merge.md).
 
 Product decisions live in [`docs/`](docs/00-product-decisions.md).

@@ -2,45 +2,31 @@ import Foundation
 import SwiftUI
 import AppKit
 import StillMacCore
-import HominemAuth
-import HominemAuthUI
+import StillCore
 
 @main
 struct StillApp: App {
-    @State private var store = PossessionsStore()
-    @State private var authController: AuthController
+    @StateObject private var account: StillAccount
+    @State private var store: PossessionsStore
 
     init() {
         // Hominem API auth: production unless HOMINEM_API_URL points somewhere else (a local or
-        // portless dev API). The session has its own Keychain entry, like the other apps.
+        // portless dev API). The session is the shared StillCore one, in the same Keychain entry
+        // the iOS app uses, so both platforms sign in as the same account.
         let baseURL = ProcessInfo.processInfo.environment["HOMINEM_API_URL"]
             .flatMap(URL.init(string:))
-            ?? AuthConfiguration.production.baseURL
-        _authController = State(
-            wrappedValue: AuthController(
-                configuration: AuthConfiguration(
-                    baseURL: baseURL, keychainService: "io.ponti.still.hominem"))
-        )
+            ?? HominemAccountService.production
+        let account = StillAccount(service: HominemAccountService(baseURL: baseURL))
+        _account = StateObject(wrappedValue: account)
+        _store = State(wrappedValue: PossessionsStore(account: account))
     }
 
     var body: some Scene {
         WindowGroup {
             RootView()
                 .environment(store)
-                .environment(authController)
+                .environmentObject(account)
                 .frame(minWidth: 1100, minHeight: 700)
-                .task {
-                    // Confirm a previously stored session against the API.
-                    await authController.refreshSession()
-                    // Default: open the user's warehouse.db if present, else a fresh DB.
-                    if !store.isOpen {
-                        do {
-                            try openDefaultDatabase()
-                        } catch {
-                            store.errorMessage = error.localizedDescription
-                        }
-                    }
-                }
         }
         .windowStyle(.hiddenTitleBar)
         .windowToolbarStyle(.unified(showsTitle: false))
@@ -52,35 +38,11 @@ struct StillApp: App {
                 .keyboardShortcut("n", modifiers: [.command, .shift])
             }
             CommandGroup(after: .saveItem) {
-                Button("Backup Database…") {
-                    store.manualBackup()
+                Button("Sync Now") {
+                    store.syncNow()
                 }
+                .keyboardShortcut("r")
             }
         }
-    }
-
-    private func openDefaultDatabase() throws {
-        // Order: last-used path (UserDefaults) -> ~/.hominem/warehouse.db -> fresh App Support DB.
-        let defaults = UserDefaults.standard
-        if let lastPath = defaults.string(forKey: "lastDatabasePath"),
-           FileManager.default.fileExists(atPath: lastPath) {
-            try store.open(url: URL(fileURLWithPath: lastPath))
-            return
-        }
-
-        let hominemPath = NSHomeDirectory() + "/.hominem/warehouse.db"
-        if FileManager.default.fileExists(atPath: hominemPath) {
-            try store.open(url: URL(fileURLWithPath: hominemPath))
-            return
-        }
-
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        // The local SQLite store keeps its original folder and file name so an
-        // existing database still opens. The one-way import onto Hominem retires
-        // it (docs/cross-platform-merge.md, tasks 008–009).
-        let dir = appSupport.appendingPathComponent("Possessions", isDirectory: true)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let url = dir.appendingPathComponent("possessions.db")
-        try store.openNewDatabase(url: url)
     }
 }

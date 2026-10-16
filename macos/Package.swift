@@ -7,12 +7,15 @@ let package = Package(
         .macOS(.v26)
     ],
     dependencies: [
-        .package(url: "https://github.com/charlesponti/HominemAuth.git", .upToNextMinor(from: "0.2.0"))
+        // The shared domain core, cache, outbox, and sync engine. The iOS app
+        // uses the same package through StillBridge.
+        .package(path: "../StillCore"),
     ],
     targets: [
-        // Domain layer: models, persistence, services. UI-independent and reusable.
-        // Retires in favour of the shared StillCore once the Mac app runs on it
-        // (docs/cross-platform-merge.md, task 008).
+        // The Mac app's own layer: the view model, the cache mapping, and the
+        // pieces the one-way SQLite importer still needs (SQLiteDatabase,
+        // PossessionsRepository, ImageStore, BackupManager). Hominem is the
+        // source of truth; the cache and the outbox live in StillCore.
         .target(
             name: "StillMacCore",
             path: "Sources/StillMacCore",
@@ -25,8 +28,7 @@ let package = Package(
             name: "Still",
             dependencies: [
                 "StillMacCore",
-                .product(name: "HominemAuth", package: "HominemAuth"),
-                .product(name: "HominemAuthUI", package: "HominemAuth"),
+                .product(name: "StillCore", package: "StillCore"),
             ],
             path: "Sources/Still"
         ),

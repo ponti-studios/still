@@ -91,15 +91,14 @@ struct SidebarView: View {
         .listStyle(.sidebar)
         .navigationSplitViewColumnWidth(min: 210, ideal: 250, max: 320)
         .safeAreaInset(edge: .bottom) {
-            if let db = store.databaseURL {
+            if !store.syncStatus.label.isEmpty {
                 HStack(spacing: 6) {
-                    Image(systemName: "cylinder")
+                    Image(systemName: store.syncStatus.symbol)
                         .foregroundStyle(.secondary)
-                    Text(db.lastPathComponent)
+                    Text(store.syncStatus.label)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
-                        .truncationMode(.middle)
                 }
                 .padding(10)
                 .frame(maxWidth: .infinity, alignment: .leading)

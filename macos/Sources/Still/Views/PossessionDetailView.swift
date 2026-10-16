@@ -78,7 +78,7 @@ struct PossessionDetailView: View {
                 }
             }
         } message: {
-            Text("This cannot be undone. A database backup is created first.")
+            Text("This cannot be undone.")
         }
         .toolbar {
             if isEditing {
@@ -180,11 +180,12 @@ struct PossessionDetailView: View {
                     .font(.largeTitle.weight(.bold))
                     .textSelection(.enabled)
                 Spacer()
-                StatusBadge(status: currentPossession.statusValue)
                 if currentPossession.isArchived {
                     Label("Archived", systemImage: "archivebox")
-                        .font(.caption)
+                        .font(.callout)
                         .foregroundStyle(.secondary)
+                } else {
+                    StatusBadge(status: currentPossession.statusValue)
                 }
             }
             if !currentPossession.displaySubtitle.isEmpty {
@@ -337,26 +338,25 @@ struct PossessionDetailView: View {
                 TextField("Model", text: $draft.model)
             }
             Section("Classification") {
-                Picker("Status", selection: Binding<Status?>(
-                    get: { draft.statusValue },
+                Picker("Status", selection: Binding<Status>(
+                    get: { draft.statusValue ?? .owned },
                     set: { draft.statusValue = $0 }
                 )) {
-                    Text("— None —").tag(Status?.none)
                     ForEach(Status.allCases) { status in
-                        Text(status.displayName).tag(status as Status?)
+                        Text(status.displayName).tag(status)
                     }
                 }
                 Toggle("Archived", isOn: $draft.isArchived)
                 Picker("Category", selection: Binding<String>(
-                    get: { draft.categoryID ?? "" },
-                    set: { id in
-                        draft.categoryID = id.isEmpty ? nil : id
-                        draft.categoryName = store.managedCategories.first { $0.id == id }?.name ?? draft.categoryName
-                    }
+                    get: { draft.categoryName },
+                    set: { draft.categoryName = $0 }
                 )) {
                     Text("— None —").tag("")
-                    ForEach(store.managedCategories) { category in
-                        Text(category.name).tag(category.id)
+                    ForEach(store.categories, id: \.self) { name in
+                        Text(name).tag(name)
+                    }
+                    if !draft.categoryName.isEmpty, !store.categories.contains(draft.categoryName) {
+                        Text(draft.categoryName).tag(draft.categoryName)
                     }
                 }
                 TextField("New Category", text: $draft.categoryName)
