@@ -91,14 +91,27 @@ struct SidebarView: View {
         .listStyle(.sidebar)
         .navigationSplitViewColumnWidth(min: 210, ideal: 250, max: 320)
         .safeAreaInset(edge: .bottom) {
-            if !store.syncStatus.label.isEmpty {
-                HStack(spacing: 6) {
-                    Image(systemName: store.syncStatus.symbol)
+            if !APIEndpoint.isProduction || !store.syncStatus.label.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    if !APIEndpoint.isProduction {
+                        HStack(spacing: 6) {
+                            Image(systemName: "hammer")
+                            Text("Development API: \(APIEndpoint.label)")
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                        .font(.caption2)
                         .foregroundStyle(.secondary)
-                    Text(store.syncStatus.label)
+                    }
+                    if !store.syncStatus.label.isEmpty {
+                        HStack(spacing: 6) {
+                            Image(systemName: store.syncStatus.symbol)
+                            Text(store.syncStatus.label)
+                                .lineLimit(1)
+                        }
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                    }
                 }
                 .padding(10)
                 .frame(maxWidth: .infinity, alignment: .leading)

@@ -13,10 +13,7 @@ struct StillApp: App {
         // Hominem API auth: production unless HOMINEM_API_URL points somewhere else (a local or
         // portless dev API). The session is the shared StillCore one, in the same Keychain entry
         // the iOS app uses, so both platforms sign in as the same account.
-        let baseURL = ProcessInfo.processInfo.environment["HOMINEM_API_URL"]
-            .flatMap(URL.init(string:))
-            ?? HominemAccountService.production
-        let account = StillAccount(service: HominemAccountService(baseURL: baseURL))
+        let account = StillAccount(service: HominemAccountService(baseURL: APIEndpoint.baseURL))
         _account = StateObject(wrappedValue: account)
         _store = State(wrappedValue: PossessionsStore(account: account))
     }
