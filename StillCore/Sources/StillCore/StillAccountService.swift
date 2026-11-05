@@ -28,6 +28,11 @@ public enum StillProblem: Error, Equatable, Sendable {
   case noService
   case signedOut
   case other
+  /// The server refused a write (a 4xx that is not a missing row): the outbox
+  /// rolls that one edit back and tells the person rather than retrying forever.
+  case rejected
+  /// The row is already gone. A delete is idempotent, so the outbox treats this as success.
+  case notFound
 
   public var message: String {
     switch self {
@@ -36,6 +41,8 @@ public enum StillProblem: Error, Equatable, Sendable {
     case .tooMany: return "Too many tries. Wait a moment and try again."
     case .noService: return "No service. Try again when you’re back online."
     case .signedOut: return "Signed out. Sign in again to see your things."
+    case .rejected: return "That change couldn’t be saved. It has been undone."
+    case .notFound: return "That isn’t there any more."
     case .other: return "Something went wrong. Try again."
     }
   }
@@ -45,7 +52,7 @@ public enum StillProblem: Error, Equatable, Sendable {
   public var isCalm: Bool {
     switch self {
     case .noService, .tooMany, .signedOut: return true
-    case .badEmail, .badCode, .other: return false
+    case .badEmail, .badCode, .rejected, .notFound, .other: return false
     }
   }
 
@@ -57,6 +64,8 @@ public enum StillProblem: Error, Equatable, Sendable {
     case .tooMany: return "tooMany"
     case .noService: return "noService"
     case .signedOut: return "signedOut"
+    case .rejected: return "rejected"
+    case .notFound: return "notFound"
     case .other: return "other"
     }
   }
@@ -135,12 +144,30 @@ public struct HominemAccountService: StillAccountService {
   static func problem(_ error: Error) -> StillProblem {
     if let known = error as? StillProblem { return known }
     guard let failure = error as? HominemAuthError else { return .other }
+    // A 4xx (that is not a session end) is a refusal, not a blip: the outbox
+    // rolls that edit back. 401/403 stay the session's business, and 404 lets a
+    // repeated delete count as success.
+    if let status = failure.httpStatus {
+      if status == 404 { return .notFound }
+      if status != 401, status != 403, (400...499).contains(status) { return .rejected }
+    }
     switch failure.problem {
     case .badCode: return .badCode
     case .tooManyAttempts: return .tooMany
     case .noService: return .noService
     case .signedOut: return .signedOut
     case .other: return .other
+    }
+  }
+}
+
+extension HominemAuthError {
+  /// The HTTP status behind a server error, when there is one. HominemAuth keeps
+  /// the status on the error but does not expose it, so Still reads it here.
+  var httpStatus: Int? {
+    switch self {
+    case .server(let status, _), .badResponse(let status, _): return status
+    default: return nil
     }
   }
 }

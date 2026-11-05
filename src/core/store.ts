@@ -1,10 +1,18 @@
 import { useCallback, useEffect, useState } from 'react';
-import { api, ApiError } from './api';
-import type { ApiPossession } from './apiTypes';
-import { type LibraryPayload, readLibrary, syncLibrary } from './library';
+import { ApiError } from './api';
+import {
+  enqueueOp,
+  isLibraryPayload,
+  type LibraryPayload,
+  type OutboxOp,
+  readLibrary,
+  syncLibrary,
+  takeNotices,
+} from './library';
 import { fromContainer, fromPossession, toPossessionPayload } from './mapping';
 import { deleteStoredPhoto } from './photos';
 import { STATUS_PATH, type Group, type GroupKind, type Item, type ItemInput } from './types';
+import { onLibraryChanged, onStatusChanged, libraryStatus } from '../platform/NativeStill';
 
 type State = { phase: 'loading' | 'ready' | 'error'; items: Item[]; containers: Group[]; collections: Group[]; error?: string };
 
@@ -12,6 +20,27 @@ const errorText = (e: unknown) => (e instanceof Error ? e.message : 'Something w
 // A 401 means the session ended. Native already cleared the account, so the screens flip to
 // sign-in on the state change; the store just skips its own error handling.
 const signedOut = (e: unknown) => e instanceof ApiError && e.status === 401;
+
+/** A client-generated id for a new row. It doubles as the create's idempotency key. */
+function newId(): string {
+  const bytes = new Uint8Array(16);
+  for (let i = 0; i < 16; i += 1) bytes[i] = Math.floor(Math.random() * 256);
+  bytes[6] = (bytes[6]! & 0x0f) | 0x40;
+  bytes[8] = (bytes[8]! & 0x3f) | 0x80;
+  const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+/** Turns an API-shaped library into the shape the screens render. */
+function toState(lib: LibraryPayload): Pick<State, 'items' | 'containers' | 'collections'> {
+  return {
+    items: lib.possessions.map((p) => fromPossession(p, lib.membership[p.id])),
+    containers: lib.containers.map((c) => fromContainer(c, lib.containers)),
+    collections: lib.collections.map((c) => ({
+      id: c.id, name: c.name, icon: '✦', description: c.description ?? '',
+    })),
+  };
+}
 
 async function fetchAll(): Promise<Pick<State, 'items' | 'containers' | 'collections'>> {
   let lib: LibraryPayload;
@@ -28,17 +57,23 @@ async function fetchAll(): Promise<Pick<State, 'items' | 'containers' | 'collect
     }
     if (!lib.possessions.length && !lib.containers.length && !lib.collections.length) throw e;
   }
-  return {
-    items: lib.possessions.map((p) => fromPossession(p, lib.membership[p.id])),
-    containers: lib.containers.map((c) => fromContainer(c, lib.containers)),
-    collections: lib.collections.map((c) => ({ id: c.id, name: c.name, icon: '✦', description: c.description ?? '' })),
-  };
+  return toState(lib);
 }
 
 export function useStore() {
   const [state, setState] = useState<State>({ phase: 'loading', items: [], containers: [], collections: [] });
   const [notice, setNotice] = useState<string | null>(null);
+  // Sync status: how many writes are still queued, and whether we are online.
+  const [pending, setPending] = useState(0);
+  const [connected, setConnected] = useState(true);
 
+  // Applies a library native pushed after it synced on its own (reconnect or
+  // foreground). A payload that does not fit is ignored, like any bad event.
+  const applyLibrary = useCallback((library: unknown, notices: string[]) => {
+    if (!isLibraryPayload(library)) return;
+    setState({ phase: 'ready', ...toState(library) });
+    if (notices.length) setNotice(notices.join(' '));
+  }, []);
   const load = useCallback(async () => {
     try {
       setState({ phase: 'ready', ...(await fetchAll()) });
@@ -46,15 +81,41 @@ export function useStore() {
       if (signedOut(e)) return;
       setState((s) => ({ ...s, phase: 'error', error: errorText(e) }));
     }
+    // A rejected edit is rolled back on the native side; its notice surfaces here.
+    try {
+      const notices = await takeNotices();
+      if (notices.length) setNotice(notices.join(' '));
+    } catch {
+      // A notice is not worth failing the load over.
+    }
   }, []);
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    void load();
+    // Native flushes the outbox when the network returns and pushes the result,
+    // so reconnecting needs no reopen and no retry.
+    const librarySub = onLibraryChanged(({ library, notices }) => {
+      applyLibrary(library, Array.isArray(notices) ? notices : []);
+    });
+    // Sync status: read once, then follow native's updates.
+    const applyStatus = (status: { pending?: unknown; connected?: unknown }) => {
+      setPending(typeof status.pending === 'number' ? status.pending : 0);
+      setConnected(status.connected !== false);
+    };
+    const statusSub = onStatusChanged(applyStatus);
+    void libraryStatus().then(applyStatus);
+    return () => {
+      librarySub?.remove();
+      statusSub?.remove();
+    };
+  }, [load, applyLibrary]);
 
-  // Optimistic: update the screen now, send the change, then refresh the cache from
-  // Hominem (write-through). A failed change reloads, which rolls the screen back.
-  const run = async (optimistic: (s: State) => State, request: () => Promise<unknown>) => {
+  // Offline-capable: queue the ops (native applies them to the cache at once),
+  // then sync. Offline the cache keeps the edits and the next sync sends them,
+  // so the screen never asks the person to retry.
+  const run = async (optimistic: (s: State) => State, ops: OutboxOp[]) => {
     setState(optimistic);
     try {
-      await request();
+      for (const op of ops) await enqueueOp(op);
       await load();
     } catch (e) {
       if (signedOut(e)) return;
@@ -65,22 +126,32 @@ export function useStore() {
   const patchItem = (id: string, patch: Partial<Item>) => (s: State): State => ({
     ...s, items: s.items.map((i) => (i.id === id ? { ...i, ...patch } : i)),
   });
-  const syncCollections = (id: string, before: string[], after: string[]) =>
-    Promise.all([
-      ...after.filter((c) => !before.includes(c)).map((c) => api('POST', `/collections/${c}/items`, { entityType: 'possessions', entityId: id })),
-      ...before.filter((c) => !after.includes(c)).map((c) => api('DELETE', `/collections/${c}/items/possessions/${id}`)),
-    ]);
+  // Membership changes are their own ops, keyed on the possession id.
+  const membershipOps = (id: string, before: string[], after: string[]): OutboxOp[] => [
+    ...after.filter((c) => !before.includes(c)).map((c) => ({
+      entity: 'membership' as const, kind: 'create' as const, entityId: id, payload: { collectionId: c },
+    })),
+    ...before.filter((c) => !after.includes(c)).map((c) => ({
+      entity: 'membership' as const, kind: 'delete' as const, entityId: id, payload: { collectionId: c },
+    })),
+  ];
 
   return {
     ...state,
     notice,
+    pending,
+    connected,
     dismissNotice: () => setNotice(null),
     reload: load,
 
     async addItem(input: ItemInput) {
+      const id = newId();
+      const ops: OutboxOp[] = [
+        { entity: 'possession', kind: 'create', entityId: id, payload: { ...toPossessionPayload(input), externalId: id } },
+        ...membershipOps(id, [], input.collectionIds),
+      ];
       try {
-        const { possession } = await api<{ possession: ApiPossession }>('POST', '/possessions', toPossessionPayload(input));
-        await syncCollections(possession.id, [], input.collectionIds);
+        for (const op of ops) await enqueueOp(op);
         await load();
       } catch (e) {
         if (signedOut(e)) return;
@@ -90,19 +161,24 @@ export function useStore() {
     updateItem(id: string, patch: Partial<Item>) {
       const current = state.items.find((i) => i.id === id);
       if (!current) return Promise.resolve();
-      return run(patchItem(id, patch), async () => {
-        const payload = toPossessionPayload(patch);
-        if (Object.keys(payload).length) await api('PATCH', `/possessions/${id}`, payload);
-        if (patch.collectionIds) await syncCollections(id, current.collectionIds, patch.collectionIds);
-      });
+      const payload = toPossessionPayload(patch);
+      const ops: OutboxOp[] = [];
+      if (Object.keys(payload).length) {
+        ops.push({ entity: 'possession', kind: 'update', entityId: id, payload });
+      }
+      if (patch.collectionIds) ops.push(...membershipOps(id, current.collectionIds, patch.collectionIds));
+      return run(patchItem(id, patch), ops);
     },
     deleteItem: (id: string) => {
       const victim = state.items.find((i) => i.id === id);
-      return run((s) => ({ ...s, items: s.items.filter((i) => i.id !== id) }), async () => {
-        await api('DELETE', `/possessions/${id}`);
-        // Best effort: a surviving file is just an orphan, never user-visible.
-        if (victim?.imageUrl) await deleteStoredPhoto(victim.imageUrl);
-      });
+      const ops: OutboxOp[] = [
+        { entity: 'possession', kind: 'delete', entityId: id, payload: {} },
+        ...membershipOps(id, victim?.collectionIds ?? [], []),
+      ];
+      const done = run((s) => ({ ...s, items: s.items.filter((i) => i.id !== id) }), ops);
+      // Best effort: a surviving file is just an orphan, never user-visible.
+      if (victim?.imageUrl) void deleteStoredPhoto(victim.imageUrl);
+      return done;
     },
     advance(id: string) {
       const item = state.items.find((i) => i.id === id);
@@ -112,12 +188,12 @@ export function useStore() {
     },
 
     async addGroup(kind: GroupKind, data: Pick<Group, 'name' | 'description'>) {
+      const id = newId();
+      const op: OutboxOp = {
+        entity: kind, kind: 'create', entityId: id, payload: { ...data, externalId: id },
+      };
       try {
-        if (kind === 'container') {
-          await api('POST', '/possessions/containers', data);
-        } else {
-          await api('POST', '/collections', data);
-        }
+        await enqueueOp(op);
         await load();
       } catch (e) {
         if (signedOut(e)) return;
@@ -129,14 +205,14 @@ export function useStore() {
         (s) => (kind === 'container'
           ? { ...s, containers: s.containers.map((g) => (g.id === id ? { ...g, ...data } : g)) }
           : { ...s, collections: s.collections.map((g) => (g.id === id ? { ...g, ...data } : g)) }),
-        () => api('PATCH', kind === 'container' ? `/possessions/containers/${id}` : `/collections/${id}`, data),
+        [{ entity: kind, kind: 'update', entityId: id, payload: { ...data } }],
       ),
     deleteGroup: (kind: GroupKind, id: string) =>
       run(
         (s) => (kind === 'container'
           ? { ...s, containers: s.containers.filter((g) => g.id !== id), items: s.items.map((i) => (i.containerId === id ? { ...i, containerId: undefined } : i)) }
           : { ...s, collections: s.collections.filter((g) => g.id !== id), items: s.items.map((i) => ({ ...i, collectionIds: i.collectionIds.filter((c) => c !== id) })) }),
-        () => api('DELETE', kind === 'container' ? `/possessions/containers/${id}` : `/collections/${id}`),
+        [{ entity: kind, kind: 'delete', entityId: id, payload: {} }],
       ),
   };
 }

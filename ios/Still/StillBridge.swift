@@ -1,5 +1,6 @@
 import Combine
 import Foundation
+import Network
 import React
 import StillCore
 import UIKit
@@ -13,10 +14,19 @@ final class StillBridge: RCTEventEmitter {
   private var account: StillAccount?
   private var subscription: AnyCancellable?
   private var observing = false
+  // Connectivity: when the network comes back, flush the outbox and refresh the
+  // screens without waiting for a launch or another edit. See docs/client-outbox.md.
+  private var pathMonitor: NWPathMonitor?
+  private let pathQueue = DispatchQueue(label: "io.ponti.still.connectivity")
+  /// Whether the network is reachable, as the last path update reported.
+  private var connected = true
+  private var foregroundObserver: NSObjectProtocol?
+  /// Serializes flushes, so a reconnect mid-sync cannot start a second one.
+  private var syncing = false
 
   @objc override static func requiresMainQueueSetup() -> Bool { true }
   override var methodQueue: DispatchQueue! { .main }
-  override func supportedEvents() -> [String]! { ["still"] }
+  override func supportedEvents() -> [String]! { ["still", "stillLibrary", "stillStatus"] }
 
   /// The API this build talks to, so JavaScript can link out (Settings) to the same place.
   override func constantsToExport() -> [AnyHashable: Any]! {
@@ -27,14 +37,85 @@ final class StillBridge: RCTEventEmitter {
     observing = true
     Task { @MainActor in
       if let account = self.account { self.emit(account.state) }
+      self.emitStatus()
     }
+    startConnectivity()
   }
 
-  override func stopObserving() { observing = false }
+  override func stopObserving() {
+    observing = false
+    stopConnectivity()
+  }
 
   private func emit(_ state: StillAccountState) {
     guard observing else { return }
     sendEvent(withName: "still", body: state.screen)
+  }
+
+  /// The sync status the screens show: how many writes are queued and whether
+  /// the network is reachable. "All saved" is then a fact, not a guess.
+  @MainActor
+  private func statusBody() -> [String: Any] {
+    ["pending": account?.pendingCount() ?? 0, "connected": connected]
+  }
+
+  @MainActor
+  private func emitStatus() {
+    guard observing else { return }
+    sendEvent(withName: "stillStatus", body: statusBody())
+  }
+
+  // MARK: Connectivity
+
+  /// Watches the network and the app's return to the foreground, and syncs when
+  /// either comes back. A sync flushes the outbox first, so an offline edit
+  /// converges the moment there is a connection, with no user action.
+  private func startConnectivity() {
+    guard pathMonitor == nil else { return }
+    let monitor = NWPathMonitor()
+    monitor.pathUpdateHandler = { [weak self] path in
+      Task { @MainActor in self?.connectionChanged(path.status == .satisfied) }
+    }
+    monitor.start(queue: pathQueue)
+    pathMonitor = monitor
+    foregroundObserver = NotificationCenter.default.addObserver(
+      forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main
+    ) { [weak self] _ in
+      Task { @MainActor in self?.syncAfterReconnect() }
+    }
+  }
+
+  private func stopConnectivity() {
+    pathMonitor?.cancel()
+    pathMonitor = nil
+    if let foregroundObserver { NotificationCenter.default.removeObserver(foregroundObserver) }
+    foregroundObserver = nil
+  }
+
+  @MainActor
+  private func connectionChanged(_ isConnected: Bool) {
+    let regained = isConnected && !connected
+    connected = isConnected
+    emitStatus()
+    // Only sync when a connection comes back; the launch sync covers the rest.
+    if regained { syncAfterReconnect() }
+  }
+
+  /// Flushes the outbox and pulls the delta, then hands the refreshed library to
+  /// JavaScript. Silent on failure: the cache stays and the next reconnect or
+  /// launch retries.
+  @MainActor
+  private func syncAfterReconnect() {
+    guard !syncing, let account else { return }
+    syncing = true
+    Task { @MainActor in
+      defer { syncing = false }
+      defer { emitStatus() }
+      guard let payload = try? await account.syncLibrary() else { return }
+      let notices = account.takeNotices()
+      guard observing else { return }
+      sendEvent(withName: "stillLibrary", body: ["library": payload, "notices": notices])
+    }
   }
 
   /// Builds the account on first use and looks up the saved session. Safe to call again.
@@ -189,6 +270,42 @@ final class StillBridge: RCTEventEmitter {
   ) {
     Task { @MainActor in
       resolve(self.account?.readLibrary() ?? StillLibraryStore.emptyPayload)
+    }
+  }
+
+  /// Queues a write (offline-capable) and applies it to the cache at once,
+  /// resolving with the library to show. `payload` is the API-shaped body as
+  /// JSON text; `entityId` is the client's UUID for a create. The following
+  /// `syncLibrary` sends the queue.
+  @objc func enqueue(
+    _ entity: String, kind: String, entityId: String, payload: String,
+    resolver resolve: @escaping RCTPromiseResolveBlock,
+    rejecter reject: @escaping RCTPromiseRejectBlock
+  ) {
+    Task { @MainActor in
+      guard let account = self.account else {
+        return reject(StillProblem.signedOut.code, StillProblem.signedOut.message, nil)
+      }
+      resolve(account.enqueue(entity: entity, kind: kind, entityId: entityId, payload: payload))
+      self.emitStatus()
+    }
+  }
+
+  /// The current sync status: how many writes are queued and whether the network
+  /// is reachable. The screens read this on launch and after every change.
+  @objc func libraryStatus(
+    _ resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock
+  ) {
+    Task { @MainActor in resolve(self.statusBody()) }
+  }
+
+  /// Notices raised since the last call (e.g. a rolled-back edit). Resolves with
+  /// an array of strings, usually empty.
+  @objc func takeNotices(
+    _ resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock
+  ) {
+    Task { @MainActor in
+      resolve(self.account?.takeNotices() ?? [])
     }
   }
 

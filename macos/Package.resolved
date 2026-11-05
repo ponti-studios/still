@@ -1,0 +1,15 @@
+{
+  "originHash" : "8a4679398cecf647849827bb3b0244b3e81680ee656f575861eb57e5061fcc0e",
+  "pins" : [
+    {
+      "identity" : "hominemauth",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/charlesponti/HominemAuth.git",
+      "state" : {
+        "revision" : "a88d00d42cdbbf3400751f52b07bca14288372ea",
+        "version" : "0.2.0"
+      }
+    }
+  ],
+  "version" : 3
+}

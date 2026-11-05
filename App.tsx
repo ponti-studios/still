@@ -181,6 +181,17 @@ export function Main({ email, onSignOut }: { email: string; onSignOut: () => voi
     );
   }
 
+  // One quiet line so "did it reach Hominem?" is answered on screen, not guessed.
+  const pending = store.pending;
+  const changes = `${pending} change${pending === 1 ? '' : 's'}`;
+  const syncLabel = store.connected
+    ? pending > 0
+      ? `${changes} syncing…`
+      : 'All changes saved'
+    : pending > 0
+      ? `${changes} waiting — offline`
+      : 'Offline — showing saved data';
+
   return (
     <SafeAreaView style={styles.fill} edges={['top']}>
       <View style={styles.app}>
@@ -192,6 +203,10 @@ export function Main({ email, onSignOut }: { email: string; onSignOut: () => voi
             </Pressable>
           </View>
         ) : null}
+
+        <View style={styles.status}>
+          <Text style={styles.statusText}>{syncLabel}</Text>
+        </View>
 
         <TabView
           navigationState={navigationState}
@@ -457,6 +472,8 @@ const styles = StyleSheet.create({
   },
   noticeText: { color: '#fff', fontSize: 14, flex: 1 },
   noticeDismiss: { color: '#fff', fontSize: 14, padding: 10 },
+  status: { paddingHorizontal: 16, paddingTop: 6, alignItems: 'center' },
+  statusText: { color: colors.faint, fontSize: 12 },
   topbar: {
     minHeight: 56, paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center',
     justifyContent: 'space-between', borderBottomWidth: 1, borderBottomColor: colors.line,
