@@ -1,3 +1,4 @@
+import React
 import SwiftUI
 
 /// The one glass surface: Liquid Glass on iOS 26, thin material below.
