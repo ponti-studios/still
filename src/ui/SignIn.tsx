@@ -1,60 +1,81 @@
 import { useState } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import type { AccountController } from '../core/useAccount';
-import { colors } from './theme';
+import { notify } from '../platform/haptics';
+import { PrimaryButton } from './controls';
+import { SFSymbol } from './SFSymbol';
+import { radius, spacing, type, useColors } from './theme';
 
 /** Sign in with an email code. The native account does the work; this only shows it and passes taps along. */
 export function SignIn({ account }: { account: AccountController }) {
+  const colors = useColors();
   const [email, setEmail] = useState('');
   const [code, setCode] = useState('');
 
   if (account.step === 'codeSent') {
     return (
-      <View style={styles.page}>
-        <Text style={styles.title}>Check your email</Text>
-        <Text style={styles.subtle}>A code is on its way to {account.pendingEmail ?? 'you'}.</Text>
+      <View style={[styles.page, { backgroundColor: colors.bg }]}>
+        <View style={[styles.icon, { backgroundColor: colors.greenTint }]}>
+          <SFSymbol name="envelope.open.fill" size={26} color={colors.green} />
+        </View>
+        <Text style={[styles.title, { color: colors.ink }]}>Check your email</Text>
+        <Text style={[styles.subtle, { color: colors.muted }]}>A code is on its way to {account.pendingEmail ?? 'you'}.</Text>
         <TextInput
-          style={styles.field}
+          style={[styles.field, { borderColor: colors.line, backgroundColor: colors.surface, color: colors.ink }]}
           value={code}
           onChangeText={(text) => {
             setCode(text);
             if (account.problem) void account.clearProblem();
           }}
           placeholder="123456"
+          placeholderTextColor={colors.faint}
+          accessibilityLabel="Sign-in code"
           keyboardType="number-pad"
+          textContentType="oneTimeCode"
+          autoComplete="sms-otp"
+          autoFocus
           maxLength={6}
           editable={!account.busy}
         />
         {account.problem ? (
-          <Text style={account.problemCalm ? styles.calm : styles.alarm}>{account.problem}</Text>
+          <Text style={[styles.problem, { color: account.problemCalm ? colors.muted : colors.danger }]}>{account.problem}</Text>
         ) : null}
-        <Pressable style={[styles.primary, account.busy && styles.disabled]} disabled={account.busy} onPress={() => void account.verify(code)}>
-          <Text style={styles.primaryText}>{account.busy ? 'Checking…' : 'Sign in'}</Text>
-        </Pressable>
+        <PrimaryButton
+          label={account.busy ? 'Checking…' : 'Sign in'}
+          disabled={account.busy}
+          style={styles.button}
+          onPress={() => {
+            void notify('success');
+            void account.verify(code);
+          }}
+        />
         <Pressable disabled={account.busy} onPress={() => { setCode(''); void account.cancelSignIn(); }}>
-          <Text style={styles.link}>Use a different email</Text>
+          <Text style={[styles.link, { color: colors.link }]}>Use a different email</Text>
         </Pressable>
       </View>
     );
   }
 
   return (
-    <View style={styles.page}>
-      <View style={styles.brand}>
-        <View style={styles.brandMark}><Text style={styles.brandLetter}>s</Text></View>
-        <Text style={styles.brandName}>still</Text>
+    <View style={[styles.page, { backgroundColor: colors.bg }]}>
+      <View style={[styles.brand, { backgroundColor: colors.green }]}>
+        <Text style={styles.brandLetter}>s</Text>
       </View>
-      <Text style={styles.title}>Your things, thoughtfully kept.</Text>
-      <Text style={styles.subtle}>Sign in with your email to see your things.</Text>
+      <Text style={[styles.title, { color: colors.ink }]}>Your things, thoughtfully kept.</Text>
+      <Text style={[styles.subtle, { color: colors.muted }]}>Sign in with your email to see your things.</Text>
       <TextInput
-        style={styles.field}
+        style={[styles.field, { borderColor: colors.line, backgroundColor: colors.surface, color: colors.ink }]}
         value={email}
         onChangeText={(text) => {
           setEmail(text);
           if (account.problem) void account.clearProblem();
         }}
         placeholder="you@example.com"
+        placeholderTextColor={colors.faint}
+        accessibilityLabel="Email address"
         keyboardType="email-address"
+        textContentType="emailAddress"
+        autoComplete="email"
         autoCapitalize="none"
         autoCorrect={false}
         editable={!account.busy}
@@ -62,34 +83,36 @@ export function SignIn({ account }: { account: AccountController }) {
         onSubmitEditing={() => void account.requestCode(email)}
       />
       {account.problem ? (
-        <Text style={account.problemCalm ? styles.calm : styles.alarm}>{account.problem}</Text>
+        <Text style={[styles.problem, { color: account.problemCalm ? colors.muted : colors.danger }]}>{account.problem}</Text>
       ) : null}
-      <Pressable style={[styles.primary, account.busy && styles.disabled]} disabled={account.busy} onPress={() => void account.requestCode(email)}>
-        <Text style={styles.primaryText}>{account.busy ? 'Sending…' : 'Send a code'}</Text>
-      </Pressable>
+      <PrimaryButton
+        label={account.busy ? 'Sending…' : 'Send a code'}
+        disabled={account.busy}
+        style={styles.button}
+        onPress={() => void account.requestCode(email)}
+      />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  page: { flex: 1, justifyContent: 'center', padding: 24, gap: 12, backgroundColor: colors.bg },
-  brand: { flexDirection: 'row', alignItems: 'center', gap: 10, justifyContent: 'center', marginBottom: 8 },
-  brandMark: { width: 32, height: 32, borderRadius: 10, backgroundColor: colors.green, alignItems: 'center', justifyContent: 'center' },
-  brandLetter: { color: '#fff', fontSize: 22, fontWeight: '600', fontFamily: 'Georgia' },
-  brandName: { fontSize: 22, fontWeight: '700', color: colors.ink },
-  title: { fontSize: 24, fontWeight: '800', letterSpacing: -0.5, textAlign: 'center', color: colors.ink },
-  subtle: { textAlign: 'center', color: colors.muted, fontSize: 14 },
+  page: { flex: 1, justifyContent: 'center', padding: spacing.xxl, gap: spacing.md },
+  brand: {
+    width: 52, height: 52, borderRadius: radius.lg, alignItems: 'center', justifyContent: 'center',
+    alignSelf: 'center', marginBottom: spacing.sm,
+  },
+  brandLetter: { color: '#fff', fontSize: 30, fontWeight: '600', fontFamily: 'Georgia' },
+  icon: {
+    width: 52, height: 52, borderRadius: radius.lg, alignItems: 'center', justifyContent: 'center',
+    alignSelf: 'center', marginBottom: spacing.sm,
+  },
+  title: { ...type.display, textAlign: 'center' },
+  subtle: { ...type.body, textAlign: 'center' },
   field: {
-    borderWidth: 1, borderColor: '#dfe0d9', borderRadius: 10, backgroundColor: '#fff',
-    paddingHorizontal: 14, minHeight: 48, fontSize: 16, color: colors.ink,
+    borderWidth: 1, borderRadius: radius.md, minHeight: 52,
+    paddingHorizontal: spacing.lg, fontSize: 16, marginTop: spacing.sm,
   },
-  primary: {
-    minHeight: 48, borderRadius: 10, backgroundColor: colors.green,
-    alignItems: 'center', justifyContent: 'center', paddingHorizontal: 18,
-  },
-  disabled: { opacity: 0.5 },
-  primaryText: { color: '#fff', fontWeight: '600', fontSize: 15 },
-  link: { textAlign: 'center', color: colors.link, fontWeight: '600', fontSize: 14, padding: 8 },
-  calm: { textAlign: 'center', color: colors.muted, fontSize: 14 },
-  alarm: { textAlign: 'center', color: colors.danger, fontSize: 14 },
+  problem: { ...type.footnote, textAlign: 'center' },
+  button: { alignSelf: 'stretch', marginTop: spacing.sm },
+  link: { ...type.subhead, textAlign: 'center', padding: spacing.sm },
 });

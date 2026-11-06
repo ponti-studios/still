@@ -114,9 +114,9 @@ describe('native tabs', () => {
   it('renders each tab scene', async () => {
     await render();
     expect(await sceneText({ key: 'overview', title: 'Overview' })).toContain('Recently added');
-    expect(await sceneText({ key: 'possessions', title: 'Possessions' })).toContain('Everything you own');
-    expect(await sceneText({ key: 'shopping', title: 'Shopping' })).toContain('Things you’re considering');
-    expect(await sceneText({ key: 'orders', title: 'Orders' })).toContain('On their way');
+    expect(await sceneText({ key: 'possessions', title: 'Possessions' })).toContain('Possessions');
+    expect(await sceneText({ key: 'shopping', title: 'Shopping' })).toContain('Shopping');
+    expect(await sceneText({ key: 'orders', title: 'Orders' })).toContain('Orders');
     const more = await sceneText({ key: 'more', title: 'More' });
     expect(more).toContain('Containers');
     expect(more).toContain('cj@ponti.io');

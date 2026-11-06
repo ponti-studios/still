@@ -19,3 +19,16 @@ export async function deleteStoredPhoto(uri: string): Promise<void> {
   if (!uri.startsWith('file://')) return;
   await NativeStill().deletePhoto(uri).catch(() => undefined);
 }
+
+/**
+ * Cuts the background out of a stored photo. The cutout replaces the
+ * original; a photo with no clear subject keeps its original and this
+ * rejects with words for the screen.
+ */
+export async function removePhotoBackground(storedUri: string): Promise<string> {
+  const cutout = await NativeStill().removeBackground(storedUri);
+  if (typeof cutout !== 'string' || !cutout.startsWith('file://')) {
+    throw new Error('No clear subject was found. Try a photo with the item against a plain backdrop.');
+  }
+  return cutout;
+}
