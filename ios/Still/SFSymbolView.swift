@@ -1,3 +1,4 @@
+import React
 import UIKit
 
 /// A true SF Symbol rendered natively: multicolor and variable weights work,

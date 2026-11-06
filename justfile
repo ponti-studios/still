@@ -39,6 +39,7 @@ device:
 check:
     npx tsc --noEmit
     npx jest
+    scripts/check-native-sources.sh
     cd StillCore && swift test
 
 e2e *flows:

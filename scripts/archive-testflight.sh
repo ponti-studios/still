@@ -42,6 +42,11 @@ if ((!SKIP_CHECKS)); then
   (cd "$ROOT/StillCore" && swift test)
 fi
 
+# Always-on audit: a native source missing from the Xcode project is invisible
+# at build time but crashes the app on launch. Never bypass this one.
+note 'Checking native sources are in the Xcode project'
+"$ROOT/scripts/check-native-sources.sh"
+
 # A timestamp keeps every upload's build number higher than the last one.
 BUILD_NUMBER="$(date +%y%m%d%H%M)"
 rm -rf "$OUT"; mkdir -p "$OUT"

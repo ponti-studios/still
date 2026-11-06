@@ -16,6 +16,12 @@
 		A31D2524DF0A498FABFCEE43 /* SceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2EE5730BFD4481F9DAAEFED /* SceneDelegate.swift */; };
 		EC4E85D48458D9819C6DA5FF /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 13B07FB81A68108700A75B9A /* PrivacyInfo.xcprivacy */; };
 		F6FC53AEF6396F6C012A2F23 /* StillBridge.m in Sources */ = {isa = PBXBuildFile; fileRef = 10ACFFD23ADD3A083C53838D /* StillBridge.m */; };
+		1A01000000000000000000001 /* GlassView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B01000000000000000000001 /* GlassView.swift */; };
+		1A02000000000000000000002 /* GlassViewManager.m in Sources */ = {isa = PBXBuildFile; fileRef = 1B02000000000000000000002 /* GlassViewManager.m */; };
+		1A03000000000000000000003 /* Haptics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B03000000000000000000003 /* Haptics.swift */; };
+		1A04000000000000000000004 /* Haptics.m in Sources */ = {isa = PBXBuildFile; fileRef = 1B04000000000000000000004 /* Haptics.m */; };
+		1A05000000000000000000005 /* SFSymbolView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B05000000000000000000005 /* SFSymbolView.swift */; };
+		1A06000000000000000000006 /* SFSymbolViewManager.m in Sources */ = {isa = PBXBuildFile; fileRef = 1B06000000000000000000006 /* SFSymbolViewManager.m */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -31,6 +37,12 @@
 		81AB9BB72411601600AC10FF /* LaunchScreen.storyboard */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = file.storyboard; name = LaunchScreen.storyboard; path = Still/LaunchScreen.storyboard; sourceTree = "<group>"; };
 		E2EE5730BFD4481F9DAAEFED /* SceneDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = SceneDelegate.swift; path = Still/SceneDelegate.swift; sourceTree = "<group>"; };
 		EB2999E45E63ABEFC83DEDA2 /* StillBridge.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Still/StillBridge.swift; sourceTree = "<group>"; };
+		1B01000000000000000000001 /* GlassView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Still/GlassView.swift; sourceTree = "<group>"; };
+		1B02000000000000000000002 /* GlassViewManager.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = Still/GlassViewManager.m; sourceTree = "<group>"; };
+		1B03000000000000000000003 /* Haptics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Still/Haptics.swift; sourceTree = "<group>"; };
+		1B04000000000000000000004 /* Haptics.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = Still/Haptics.m; sourceTree = "<group>"; };
+		1B05000000000000000000005 /* SFSymbolView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Still/SFSymbolView.swift; sourceTree = "<group>"; };
+		1B06000000000000000000006 /* SFSymbolViewManager.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = Still/SFSymbolViewManager.m; sourceTree = "<group>"; };
 		ED297162215061F000B7C4FE /* JavaScriptCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = JavaScriptCore.framework; path = System/Library/Frameworks/JavaScriptCore.framework; sourceTree = SDKROOT; };
 /* End PBXFileReference section */
 
@@ -58,6 +70,12 @@
 				13B07FB81A68108700A75B9A /* PrivacyInfo.xcprivacy */,
 				EB2999E45E63ABEFC83DEDA2 /* StillBridge.swift */,
 				10ACFFD23ADD3A083C53838D /* StillBridge.m */,
+				1B01000000000000000000001 /* GlassView.swift */,
+				1B02000000000000000000002 /* GlassViewManager.m */,
+				1B03000000000000000000003 /* Haptics.swift */,
+				1B04000000000000000000004 /* Haptics.m */,
+				1B05000000000000000000005 /* SFSymbolView.swift */,
+				1B06000000000000000000006 /* SFSymbolViewManager.m */,
 			);
 			name = Still;
 			sourceTree = "<group>";
@@ -267,6 +285,12 @@
 				A31D2524DF0A498FABFCEE43 /* SceneDelegate.swift in Sources */,
 				487909E07D7A5342F35817B4 /* StillBridge.swift in Sources */,
 				F6FC53AEF6396F6C012A2F23 /* StillBridge.m in Sources */,
+				1A01000000000000000000001 /* GlassView.swift in Sources */,
+				1A02000000000000000000002 /* GlassViewManager.m in Sources */,
+				1A03000000000000000000003 /* Haptics.swift in Sources */,
+				1A04000000000000000000004 /* Haptics.m in Sources */,
+				1A05000000000000000000005 /* SFSymbolView.swift in Sources */,
+				1A06000000000000000000006 /* SFSymbolViewManager.m in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
