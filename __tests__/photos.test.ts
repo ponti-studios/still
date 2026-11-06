@@ -1,13 +1,15 @@
 import { fromPossession, toPossessionPayload } from '../src/core/mapping';
-import { deleteStoredPhoto, photoFilename, savePhoto } from '../src/core/photos';
+import { deleteStoredPhoto, photoFilename, removePhotoBackground, savePhoto } from '../src/core/photos';
 import type { ApiPossession } from '../src/core/apiTypes';
 
 const mockSave = jest.fn();
 const mockDelete = jest.fn();
+const mockCutout = jest.fn();
 jest.mock('../src/platform/NativeStill', () => ({
   NativeStill: () => ({
     savePhoto: (...args: unknown[]) => mockSave(...args),
     deletePhoto: (...args: unknown[]) => mockDelete(...args),
+    removeBackground: (...args: unknown[]) => mockCutout(...args),
   }),
 }));
 
@@ -21,6 +23,7 @@ describe('item photos', () => {
   beforeEach(() => {
     mockSave.mockReset();
     mockDelete.mockReset();
+    mockCutout.mockReset();
   });
 
   it('names stored photos by mimetype', () => {
@@ -51,6 +54,24 @@ describe('item photos', () => {
   it('swallows deletion failures', async () => {
     mockDelete.mockRejectedValue(new Error('gone'));
     await expect(deleteStoredPhoto('file:///stored/x.jpg')).resolves.toBeUndefined();
+  });
+
+  it('takes the cutout URI the bridge resolves', async () => {
+    mockCutout.mockResolvedValue('file:///stored/item-photo-1-cutout.png');
+    await expect(removePhotoBackground('file:///stored/item-photo-1.jpg')).resolves.toBe(
+      'file:///stored/item-photo-1-cutout.png',
+    );
+    expect(mockCutout).toHaveBeenCalledWith('file:///stored/item-photo-1.jpg');
+  });
+
+  it('rejects a cutout that is not a local file', async () => {
+    mockCutout.mockResolvedValue('https://cdn/x.png');
+    await expect(removePhotoBackground('file:///stored/x.jpg')).rejects.toThrow('No clear subject');
+  });
+
+  it('passes bridge failures through with their message', async () => {
+    mockCutout.mockRejectedValue(new Error('No clear subject was found. Try another backdrop.'));
+    await expect(removePhotoBackground('file:///stored/x.jpg')).rejects.toThrow('Try another backdrop.');
   });
 
   it('reads the photo from possession metadata', () => {

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ActionSheetIOS, Alert, Linking, Pressable, ScrollView, StyleSheet, Text, TextInput, View, type TextInputInstance } from 'react-native';
 import TabView, { useBottomTabBarHeight } from 'react-native-bottom-tabs';
+import Animated, { FadeInDown, FadeOut } from 'react-native-reanimated';
 import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { deriveStats } from './src/core/derive';
 import { longToday } from './src/core/format';
@@ -10,11 +11,14 @@ import { useStore, type Store } from './src/core/store';
 import { SHOPPING, type Group, type GroupKind, type Item, type ItemInput } from './src/core/types';
 import { settingsUrl } from './src/platform/NativeStill';
 import { GroupGrid, GroupSheet } from './src/ui/Groups';
-import { ItemList, type ItemActions } from './src/ui/ItemList';
+import { ItemList, SearchGlyph, type ItemActions } from './src/ui/ItemList';
 import { ItemSheet } from './src/ui/ItemSheet';
 import { Nudge, Panels, StatCards } from './src/ui/Overview';
 import { SignIn } from './src/ui/SignIn';
-import { colors } from './src/ui/theme';
+import { SFSymbol } from './src/ui/SFSymbol';
+import { impact } from './src/platform/haptics';
+import { Chevron, EmptyState } from './src/ui/controls';
+import { radius, spacing, type, useColors } from './src/ui/theme';
 
 const HELP_URL = 'mailto:cj@ponti.io?subject=Still%20feedback';
 
@@ -36,7 +40,6 @@ const TAB_PAGE: Record<Exclude<TabKey, 'more'>, Page> = {
   shopping: 'Shopping',
   orders: 'Orders',
 };
-// SF Symbol names are checked against the shipped set at typecheck time.
 const TAB_ICONS = {
   overview: { base: 'house', fill: 'house.fill' },
   possessions: { base: 'shippingbox', fill: 'shippingbox.fill' },
@@ -45,17 +48,12 @@ const TAB_ICONS = {
   more: { base: 'ellipsis', fill: 'ellipsis' },
 } as const;
 const MORE_PAGES: { page: MorePage; icon: string }[] = [
-  { page: 'Containers', icon: '🧳' },
-  { page: 'Collections', icon: '🏷️' },
-  { page: 'Archive', icon: '🗄️' },
+  { page: 'Containers', icon: 'archivebox' },
+  { page: 'Collections', icon: 'tag.fill' },
+  { page: 'Archive', icon: 'archivebox.fill' },
 ];
-const TITLES: Record<Page, string> = {
-  Overview: 'Your things, thoughtfully kept.', Possessions: 'Possessions', Shopping: 'Shopping list', Orders: 'Orders',
-  Containers: 'Containers', Collections: 'Collections', Archive: 'Archive',
-};
-const LIST_TITLES: Record<Page, string> = {
-  Overview: 'Recently added', Possessions: 'Everything you own', Shopping: 'Things you’re considering', Orders: 'On their way',
-  Containers: 'Items', Collections: 'Items', Archive: 'Past possessions',
+const LIST_TITLES: Partial<Record<Page, string>> = {
+  Overview: 'Recently added',
 };
 
 export default function App() {
@@ -68,20 +66,19 @@ export default function App() {
 
 function Gated() {
   const account = useAccount();
+  const colors = useColors();
 
   if (!account.ready) {
     return (
-      <SafeAreaView style={styles.fill}>
-        <View style={styles.splash}>
-          <Text style={styles.splashText}>Loading…</Text>
-        </View>
+      <SafeAreaView style={[styles.fill, { backgroundColor: colors.bg }]}>
+        <SplashText text="Loading…" />
       </SafeAreaView>
     );
   }
 
   if (!account.email) {
     return (
-      <SafeAreaView style={styles.fill}>
+      <SafeAreaView style={[styles.fill, { backgroundColor: colors.bg }]}>
         <SignIn account={account} />
       </SafeAreaView>
     );
@@ -97,12 +94,11 @@ function openLink(url: string | null) {
 
 export function Main({ email, onSignOut }: { email: string; onSignOut: () => void }) {
   const store = useStore();
+  const colors = useColors();
   const { items } = store;
   const [tabIndex, setTabIndex] = useState(0);
   const [morePage, setMorePage] = useState<MorePage | null>(null);
   const [groupId, setGroupId] = useState<string | undefined>(undefined);
-  const [query, setQuery] = useState('');
-  const [searchOpen, setSearchOpen] = useState(false);
   const [nudge, setNudge] = useState<boolean | null>(null);
   const [itemSheet, setItemSheet] = useState<{ item?: Item; defaults?: Partial<ItemInput> } | null>(null);
   const [groupSheet, setGroupSheet] = useState<{ kind: GroupKind; group?: Group } | null>(null);
@@ -123,6 +119,7 @@ export function Main({ email, onSignOut }: { email: string; onSignOut: () => voi
     setGroupId(id);
   };
   const onIndexChange = (next: number) => {
+    // Tab switches keep the section but drop the detail: predictable everywhere.
     setTabIndex(next);
     setGroupId(undefined);
   };
@@ -139,7 +136,7 @@ export function Main({ email, onSignOut }: { email: string; onSignOut: () => voi
   const actions: ItemActions = {
     onEdit: (item) => setItemSheet({ item }),
     onAdvance: (item) => void store.advance(item.id),
-    onArchive: (item) => void store.updateItem(item.id, { status: item.status === 'Archived' ? 'Owned' : 'Archived' }),
+    onArchive: (item) => store.updateItem(item.id, { status: item.status === 'Archived' ? 'Owned' : 'Archived' }),
     onDelete: confirmDeleteItem,
   };
   const deleteGroup = (g: Group, k: GroupKind) => {
@@ -160,18 +157,18 @@ export function Main({ email, onSignOut }: { email: string; onSignOut: () => voi
   };
 
   const navigationState = useMemo(() => ({ index: tabIndex, routes: TABS }), [tabIndex]);
-  const scene = { store, stats, groupId, query, searchOpen, nudge, actions, deleteGroup, dismissNudgeNow, go, setGroupId, setQuery, setSearchOpen, setItemSheet, setGroupSheet };
+  const scene = { store, stats, groupId, nudge, actions, deleteGroup, dismissNudgeNow, go, setGroupId, setItemSheet, setGroupSheet };
 
   if (store.phase !== 'ready') {
     return (
-      <SafeAreaView style={styles.fill}>
+      <SafeAreaView style={[styles.fill, { backgroundColor: colors.bg }]}>
         <View style={styles.splash}>
           {store.phase === 'loading' ? (
-            <Text style={styles.splashText}>Loading your things…</Text>
+            <SplashText text="Loading your things…" />
           ) : (
             <>
-              <Text style={styles.splashText}>Couldn’t load your things: {store.error}</Text>
-              <Pressable style={styles.primary} onPress={() => void store.reload()}>
+              <SplashText text="Couldn’t load your things. Check your connection." />
+              <Pressable style={[styles.primary, { backgroundColor: colors.green }]} onPress={() => void store.reload()}>
                 <Text style={styles.primaryText}>Try again</Text>
               </Pressable>
             </>
@@ -181,39 +178,36 @@ export function Main({ email, onSignOut }: { email: string; onSignOut: () => voi
     );
   }
 
-  // One quiet line so "did it reach Hominem?" is answered on screen, not guessed.
+  // The sync line only speaks when there is something to say.
   const pending = store.pending;
-  const changes = `${pending} change${pending === 1 ? '' : 's'}`;
   const syncLabel = store.connected
     ? pending > 0
-      ? `${changes} syncing…`
-      : 'All changes saved'
+      ? `${pending} ${pending === 1 ? 'change' : 'changes'} syncing…`
+      : null
     : pending > 0
-      ? `${changes} waiting — offline`
+      ? `${pending} waiting — offline`
       : 'Offline — showing saved data';
 
   return (
     <SafeAreaView style={styles.fill} edges={['top']}>
       <View style={styles.app}>
         {store.notice ? (
-          <View style={styles.notice}>
-            <Text style={styles.noticeText}>{store.notice}</Text>
-            <Pressable onPress={store.dismissNotice} accessibilityLabel="Dismiss" hitSlop={10}>
-              <Text style={styles.noticeDismiss}>✕</Text>
-            </Pressable>
-          </View>
+          <Animated.View entering={FadeInDown.duration(300)} exiting={FadeOut.duration(250)}>
+            <View style={[styles.notice, { borderColor: colors.line, backgroundColor: colors.surface }]}>
+              <Text style={[styles.noticeText, { color: colors.ink }]} numberOfLines={2}>{store.notice}</Text>
+              <Pressable onPress={store.dismissNotice} accessibilityLabel="Dismiss" hitSlop={10}>
+                <SFSymbol name="xmark" size={14} weight="semibold" color={colors.muted} />
+              </Pressable>
+            </View>
+          </Animated.View>
         ) : null}
-
-        <View style={styles.status}>
-          <Text style={styles.statusText}>{syncLabel}</Text>
-        </View>
 
         <TabView
           navigationState={navigationState}
           renderScene={({ route }: { route: TabRoute; jumpTo: (key: string) => void }) =>
             route.key === 'more'
               ? <MoreScreen email={email} onSignOut={onSignOut} morePage={morePage} setMorePage={setMorePage} scene={scene} />
-              : <PageScreen page={TAB_PAGE[route.key]} scene={scene} />
+              : <PageScreen key={route.key} page={TAB_PAGE[route.key]} scene={scene} />
           }
           onIndexChange={onIndexChange}
           getIcon={({ route, focused }: { route: TabRoute; focused: boolean }) => {
@@ -227,6 +221,12 @@ export function Main({ email, onSignOut }: { email: string; onSignOut: () => voi
           minimizeBehavior="onScrollDown"
           hapticFeedbackEnabled
         />
+
+        {syncLabel ? (
+          <View style={styles.status}>
+            <Text style={[styles.statusText, { color: colors.muted }]}>{syncLabel}</Text>
+          </View>
+        ) : null}
 
         {itemSheet ? (
           <ItemSheet item={itemSheet.item} defaults={itemSheet.defaults} containers={store.containers} collections={store.collections} categories={categories}
@@ -245,24 +245,24 @@ type Scene = {
   store: Store;
   stats: ReturnType<typeof deriveStats>;
   groupId: string | undefined;
-  query: string;
-  searchOpen: boolean;
   nudge: boolean | null;
   actions: ItemActions;
   deleteGroup: (g: Group, k: GroupKind) => void;
   dismissNudgeNow: () => void;
   go: (page: Page, id?: string) => void;
   setGroupId: (id: string | undefined) => void;
-  setQuery: (q: string) => void;
-  setSearchOpen: (open: boolean) => void;
   setItemSheet: (s: { item?: Item; defaults?: Partial<ItemInput> } | null) => void;
   setGroupSheet: (s: { kind: GroupKind; group?: Group } | null) => void;
 };
 
 function PageScreen({ page, scene, onBack }: { page: Page; scene: Scene; onBack?: () => void }) {
-  const { store, stats, groupId, query, searchOpen, nudge } = scene;
+  const colors = useColors();
+  const { store, stats, groupId, nudge } = scene;
   const { items, containers, collections } = store;
   const tabBarHeight = useBottomTabBarHeight();
+  // Search lives with the page, not the app: switching tabs starts clean.
+  const [query, setQuery] = useState('');
+  const [searchOpen, setSearchOpen] = useState(false);
   const searchRef = useRef<TextInputInstance>(null);
   useEffect(() => {
     if (searchOpen) searchRef.current?.focus();
@@ -297,107 +297,121 @@ function PageScreen({ page, scene, onBack }: { page: Page; scene: Scene; onBack?
     );
   };
 
-  const heading = openGroup ? openGroup.name : TITLES[page];
+  const heading = openGroup ? openGroup.name : page === 'Overview' ? 'Your things, thoughtfully kept.' : page;
   const primary = kind && !openGroup
     ? { label: `New ${kind}`, run: () => scene.setGroupSheet({ kind }) }
     : { label: 'Add item', run: () => scene.setItemSheet({ defaults: openGroup && kind ? (kind === 'container' ? { containerId: openGroup.id } : { collectionIds: [openGroup.id] }) : undefined }) };
 
+  const header = (
+    <View>
+      <View style={styles.headingRow}>
+        <View style={styles.headingMain}>
+          {page === 'Overview' ? <Text style={[styles.eyebrow, { color: colors.faint }]}>{longToday().toUpperCase()}</Text> : null}
+          <Text style={[styles.h1, { color: colors.ink }]}>{heading}</Text>
+          {openGroup?.description ? <Text style={[styles.subtitle, { color: colors.muted }]}>{openGroup.description}</Text> : null}
+        </View>
+        {openGroup && kind ? (
+          <Pressable onPress={openGroupMenu} accessibilityLabel={`Actions for ${openGroup.name}`} hitSlop={12} style={styles.dots}>
+            <SFSymbol name="ellipsis" size={17} weight="semibold" color={colors.muted} />
+          </Pressable>
+        ) : null}
+      </View>
+
+      {page === 'Overview' ? (
+        <>
+          <StatCards stats={stats} />
+          {stats.unhomed > 0 && nudge === false ? (
+            <Nudge count={stats.unhomed} onReview={() => scene.go('Possessions')} onDismiss={scene.dismissNudgeNow} />
+          ) : null}
+        </>
+      ) : null}
+    </View>
+  );
+
+  const footer = page === 'Overview' ? (
+    <Panels containers={containers} items={items} ordered={stats.ordered}
+      onSeeAll={() => scene.go('Containers')} onOrders={() => scene.go('Orders')} onCreate={() => scene.setGroupSheet({ kind: 'container' })} />
+  ) : null;
+
   return (
-    <View style={styles.page}>
-      <View style={styles.topbar}>
+    <View style={[styles.page, { backgroundColor: colors.bg }]}>
+      <View style={[styles.topbar, { borderBottomColor: colors.line }]}>
         {searchOpen ? (
           <View style={styles.searchOpen}>
             <TextInput
               ref={searchRef}
-              style={styles.searchInput}
+              style={[styles.searchInput, { color: colors.ink }]}
               value={query}
-              onChangeText={scene.setQuery}
+              onChangeText={setQuery}
               placeholder="Search anything…"
+              placeholderTextColor={colors.faint}
               returnKeyType="search"
             />
-            <Pressable onPress={() => { scene.setQuery(''); scene.setSearchOpen(false); }} accessibilityLabel="Close search" hitSlop={10}>
-              <Text style={styles.searchClose}>✕</Text>
+            <Pressable onPress={() => { setQuery(''); setSearchOpen(false); }} accessibilityLabel="Close search" hitSlop={10}>
+              <SFSymbol name="xmark" size={15} weight="semibold" color={colors.muted} />
             </Pressable>
           </View>
         ) : (
           <>
-            <View style={styles.crumb}>
+            <View style={styles.topbarLeft}>
               {openGroup ? (
-                <Pressable onPress={() => scene.setGroupId(undefined)}><Text style={styles.back}>← {page}</Text></Pressable>
+                <Pressable onPress={() => scene.setGroupId(undefined)} style={styles.backRow} accessibilityLabel={`Back to ${page}`}>
+                  <SFSymbol name="chevron.left" size={16} weight="semibold" color={colors.green} />
+                  <Text style={[styles.back, { color: colors.green }]}>{page}</Text>
+                </Pressable>
               ) : onBack ? (
-                <Pressable onPress={onBack}><Text style={styles.back}>← More</Text></Pressable>
-              ) : (
-                <Text style={styles.crumbText}>{page}</Text>
-              )}
+                <Pressable onPress={onBack} style={styles.backRow} accessibilityLabel="Back to More">
+                  <SFSymbol name="chevron.left" size={16} weight="semibold" color={colors.green} />
+                  <Text style={[styles.back, { color: colors.green }]}>More</Text>
+                </Pressable>
+              ) : null}
             </View>
-            <Pressable onPress={() => scene.setSearchOpen(true)} accessibilityLabel="Search" hitSlop={10} style={styles.searchToggle}>
-              <Text style={styles.searchIcon}>🔍</Text>
+            <Pressable onPress={() => setSearchOpen(true)} accessibilityLabel="Search" hitSlop={10} style={styles.searchToggle}>
+              <SearchGlyph />
             </Pressable>
           </>
         )}
       </View>
 
-      <ScrollView style={styles.content} contentContainerStyle={styles.contentPad} keyboardShouldPersistTaps="handled">
-        <View style={styles.headingRow}>
-          <View style={styles.headingMain}>
-            {page === 'Overview' ? <Text style={styles.eyebrow}>{longToday().toUpperCase()}</Text> : null}
-            <Text style={styles.h1}>{heading}</Text>
-            {page === 'Overview' ? <Text style={styles.subtitle}>A clear view of what you own, want, and everything in between.</Text> : null}
-            {openGroup?.description ? <Text style={styles.subtitle}>{openGroup.description}</Text> : null}
-          </View>
-          {openGroup && kind ? (
-            <Pressable onPress={openGroupMenu} accessibilityLabel={`Actions for ${openGroup.name}`} hitSlop={10} style={styles.dots}>
-              <Text style={styles.dotsText}>•••</Text>
-            </Pressable>
-          ) : null}
-        </View>
-
-        {page === 'Overview' ? (
-          <>
-            <StatCards stats={stats} />
-            {stats.unhomed > 0 && nudge === false ? (
-              <Nudge count={stats.unhomed} onReview={() => scene.go('Possessions')} onDismiss={scene.dismissNudgeNow} />
-            ) : null}
-          </>
-        ) : null}
-
-        {kind && !openGroup && groupId === undefined ? (
-          <GroupGrid kind={kind} groups={groups} items={items}
-            onOpen={(g) => scene.go(page, g.id)} onEdit={(g) => scene.setGroupSheet({ kind, group: g })}
-            onDelete={(g) => scene.deleteGroup(g, kind)} onCreate={() => scene.setGroupSheet({ kind })} />
-        ) : null}
-        {kind && !openGroup && groupId !== undefined ? (
-          <View style={styles.empty}>
-            <Text style={styles.emptyText}>That {kind} no longer exists.</Text>
-            <Pressable style={styles.primary} onPress={() => scene.setGroupId(undefined)}>
-              <Text style={styles.primaryText}>Back to {page}</Text>
-            </Pressable>
-          </View>
-        ) : null}
-
-        {(!kind || openGroup) ? (
-          <ItemList title={LIST_TITLES[page]} items={pageItems} containers={containers} query={query}
-            limit={page === 'Overview' ? 5 : undefined} showControls={page !== 'Overview'}
+      {kind && !openGroup ? (
+        <ScrollView style={styles.content} contentContainerStyle={styles.contentPad} keyboardShouldPersistTaps="handled">
+          {header}
+          {groupId !== undefined ? (
+            <EmptyState body={`That ${kind} no longer exists.`} actionLabel={`Back to ${page}`} onAction={() => scene.setGroupId(undefined)} />
+          ) : (
+            <GroupGrid kind={kind} groups={groups} items={items}
+              onOpen={(g) => scene.go(page, g.id)} onEdit={(g) => scene.setGroupSheet({ kind, group: g })}
+              onDelete={(g) => scene.deleteGroup(g, kind)} onCreate={() => scene.setGroupSheet({ kind })} />
+          )}
+        </ScrollView>
+      ) : (
+        <View style={styles.listWrap}>
+          <ItemList
+            title={LIST_TITLES[page]}
+            items={pageItems}
+            containers={containers}
+            query={query}
+            limit={page === 'Overview' ? 5 : undefined}
+            showControls={page !== 'Overview'}
+            header={header}
+            footer={footer ?? undefined}
             empty={page === 'Archive'
-              ? <Text style={styles.emptyText}>Archived items will show up here.</Text>
+              ? <Text style={[styles.emptyText, { color: colors.muted }]}>No archived items.</Text>
               : query
-                ? <Text style={styles.emptyText}>Nothing matches your search.</Text>
-                : <>
-                  <Text style={styles.emptyText}>Nothing here yet.</Text>
-                  <Pressable style={styles.primary} onPress={() => scene.setItemSheet({})}><Text style={styles.primaryText}>+ Add item</Text></Pressable>
-                </>}
-            actions={scene.actions} />
-        ) : null}
-
-        {page === 'Overview' ? (
-          <Panels containers={containers} items={items} ordered={stats.ordered}
-            onSeeAll={() => scene.go('Containers')} onOrders={() => scene.go('Orders')} onCreate={() => scene.setGroupSheet({ kind: 'container' })} />
-        ) : null}
-      </ScrollView>
+                ? <Text style={[styles.emptyText, { color: colors.muted }]}>Nothing matches your search.</Text>
+                : <EmptyState body="Nothing here yet." actionLabel={primary.label} onAction={primary.run} />}
+            actions={scene.actions}
+          />
+        </View>
+      )}
 
       {page !== 'Archive' ? (
-        <Pressable style={[styles.fab, { bottom: tabBarHeight + 14 }]} onPress={primary.run}>
-          <Text style={styles.primaryText}>{`+ ${primary.label}`}</Text>
+        <Pressable style={[styles.fab, { bottom: tabBarHeight + 14, backgroundColor: colors.green }]} onPress={() => {
+          void impact('light');
+          primary.run();
+        }} accessibilityLabel={primary.label}>
+          <SFSymbol name="plus" size={18} weight="bold" color="#fff" />
+          <Text style={styles.primaryText}>{primary.label}</Text>
         </Pressable>
       ) : null}
     </View>
@@ -407,6 +421,8 @@ function PageScreen({ page, scene, onBack }: { page: Page; scene: Scene; onBack?
 function MoreScreen({ email, onSignOut, morePage, setMorePage, scene }: {
   email: string; onSignOut: () => void; morePage: MorePage | null; setMorePage: (p: MorePage | null) => void; scene: Scene;
 }) {
+  const colors = useColors();
+  const insets = useSafeAreaInsets();
   const initials = email.slice(0, 2).toUpperCase();
   const confirmSignOut = () => {
     Alert.alert('Sign out?', 'You’ll need an email code to sign back in.', [
@@ -416,104 +432,102 @@ function MoreScreen({ email, onSignOut, morePage, setMorePage, scene }: {
   };
 
   if (morePage) {
-    return <PageScreen page={morePage} scene={scene} onBack={() => { scene.setGroupId(undefined); setMorePage(null); }} />;
+    return <PageScreen key={morePage} page={morePage} scene={scene} onBack={() => { scene.setGroupId(undefined); setMorePage(null); }} />;
   }
 
   return (
-    <View style={styles.page}>
-      <View style={styles.topbar}>
-        <View style={styles.crumb}>
-          <Text style={styles.crumbText}>More</Text>
-        </View>
+    <ScrollView style={[styles.page, { backgroundColor: colors.bg }]} contentContainerStyle={[styles.contentPad, { paddingBottom: 24 + insets.bottom }]}>
+      <View style={styles.moreList}>
+        {MORE_PAGES.map(({ page: label, icon }) => (
+          <Pressable key={label} onPress={() => setMorePage(label)} style={styles.navItem} accessibilityRole="button" accessibilityLabel={label}>
+            <SFSymbol name={icon} size={19} color={colors.muted} />
+            <Text style={[styles.navText, { color: colors.ink }]}>{label}</Text>
+            <View style={styles.navChevron}><Chevron /></View>
+          </Pressable>
+        ))}
+        <Pressable onPress={() => openLink(settingsUrl())} style={styles.navItem} accessibilityRole="button" accessibilityLabel="Settings">
+          <SFSymbol name="gearshape" size={19} color={colors.muted} />
+          <Text style={[styles.navText, { color: colors.ink }]}>Settings</Text>
+          <View style={styles.navChevron}><Chevron /></View>
+        </Pressable>
+        <Pressable onPress={() => openLink(HELP_URL)} style={styles.navItem} accessibilityRole="button" accessibilityLabel="Help and feedback">
+          <SFSymbol name="questionmark.circle" size={19} color={colors.muted} />
+          <Text style={[styles.navText, { color: colors.ink }]}>Help & feedback</Text>
+          <View style={styles.navChevron}><Chevron /></View>
+        </Pressable>
+        <Pressable onPress={confirmSignOut} style={[styles.profile, { borderTopColor: colors.line }]} accessibilityRole="button" accessibilityLabel={`Sign out of ${email}`}>
+          <View style={[styles.avatar, { backgroundColor: colors.greenTint }]}>
+            <Text style={[styles.avatarText, { color: colors.green }]}>{initials}</Text>
+          </View>
+          <View style={styles.profileMain}>
+            <Text style={[styles.profileEmail, { color: colors.ink }]} numberOfLines={1}>{email}</Text>
+            <Text style={[styles.profileSub, { color: colors.muted }]}>Sign out</Text>
+          </View>
+        </Pressable>
       </View>
-      <ScrollView style={styles.content} contentContainerStyle={styles.contentPad}>
-        <View style={styles.moreList}>
-          {MORE_PAGES.map(({ page: label, icon }) => (
-            <Pressable key={label} onPress={() => setMorePage(label)} style={styles.navItem}>
-              <Text style={styles.navIcon}>{icon}</Text>
-              <Text style={styles.navText}>{label}</Text>
-            </Pressable>
-          ))}
-          <Pressable onPress={() => openLink(settingsUrl())} style={styles.navItem}>
-            <Text style={styles.navIcon}>⚙️</Text>
-            <Text style={styles.navText}>Settings</Text>
-          </Pressable>
-          <Pressable onPress={() => openLink(HELP_URL)} style={styles.navItem}>
-            <Text style={styles.navIcon}>💬</Text>
-            <Text style={styles.navText}>Help & feedback</Text>
-          </Pressable>
-          <Pressable onPress={confirmSignOut} style={styles.profile}>
-            <View style={styles.avatar}><Text style={styles.avatarText}>{initials}</Text></View>
-            <View style={styles.profileMain}>
-              <Text style={styles.profileEmail} numberOfLines={1}>{email}</Text>
-              <Text style={styles.profileSub}>Sign out</Text>
-            </View>
-          </Pressable>
-        </View>
-      </ScrollView>
-    </View>
+    </ScrollView>
   );
 }
 
+function SplashText({ text }: { text: string }) {
+  const colors = useColors();
+  return <Text style={[styles.splashText, { color: colors.muted }]}>{text}</Text>;
+}
+
 const styles = StyleSheet.create({
-  fill: { flex: 1, backgroundColor: colors.bg },
-  app: { flex: 1, backgroundColor: colors.bg },
-  page: { flex: 1, backgroundColor: colors.bg },
+  fill: { flex: 1 },
+  app: { flex: 1 },
+  page: { flex: 1 },
   splash: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 16, padding: 24 },
-  splashText: { color: colors.muted, fontSize: 15, textAlign: 'center' },
+  splashText: { fontSize: 15, textAlign: 'center' },
   primary: {
-    minHeight: 44, borderRadius: 10, backgroundColor: colors.green,
-    alignItems: 'center', justifyContent: 'center', paddingHorizontal: 18,
+    minHeight: 44, borderRadius: 10, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 18,
   },
   primaryText: { color: '#fff', fontWeight: '600', fontSize: 14 },
   notice: {
-    margin: 8, marginBottom: 0, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    gap: 8, padding: 6, paddingLeft: 14, borderRadius: 12, backgroundColor: '#3b2420',
+    margin: 12, marginBottom: 0, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    gap: 8, padding: 6, paddingLeft: 14, borderRadius: 14, borderWidth: 1,
   },
-  noticeText: { color: '#fff', fontSize: 14, flex: 1 },
-  noticeDismiss: { color: '#fff', fontSize: 14, padding: 10 },
+  noticeText: { fontSize: 14, flex: 1 },
   status: { paddingHorizontal: 16, paddingTop: 6, alignItems: 'center' },
-  statusText: { color: colors.faint, fontSize: 12 },
+  statusText: { fontSize: 12 },
   topbar: {
     minHeight: 56, paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center',
-    justifyContent: 'space-between', borderBottomWidth: 1, borderBottomColor: colors.line,
+    justifyContent: 'space-between', borderBottomWidth: 1,
   },
-  crumb: { flex: 1 },
-  crumbText: { fontSize: 17, fontWeight: '700', color: colors.ink },
-  back: { fontWeight: '600', fontSize: 16, color: colors.green, paddingVertical: 8 },
+  topbarLeft: { flex: 1, flexDirection: 'row', alignItems: 'center' },
+  backRow: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingVertical: 8, paddingRight: 12 },
+  back: { fontWeight: '600', fontSize: 16 },
   searchToggle: { padding: 4 },
-  searchIcon: { fontSize: 20 },
   searchOpen: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8 },
-  searchInput: { flex: 1, fontSize: 16, color: colors.ink, minHeight: 40 },
-  searchClose: { fontSize: 16, color: '#6b6e67', padding: 4 },
+  searchInput: { flex: 1, fontSize: 16, minHeight: 40 },
   content: { flex: 1 },
   contentPad: { padding: 20, paddingBottom: 120 },
+  listWrap: { flex: 1, paddingHorizontal: 20, paddingTop: 20 },
   headingRow: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, marginBottom: 20 },
   headingMain: { flex: 1, gap: 6 },
-  eyebrow: { color: colors.faint, fontSize: 11, fontWeight: '700', letterSpacing: 0.8 },
-  h1: { fontSize: 26, fontWeight: '800', letterSpacing: -0.6, color: colors.ink },
-  subtitle: { color: colors.muted, fontSize: 14 },
+  eyebrow: { fontSize: 11, fontWeight: '700', letterSpacing: 0.8 },
+  h1: { fontSize: 26, fontWeight: '800', letterSpacing: -0.6 },
+  subtitle: { fontSize: 14 },
   dots: { padding: 4 },
-  dotsText: { fontSize: 16, color: '#6b6e67', letterSpacing: 1 },
   fab: {
     position: 'absolute', right: 16, minHeight: 52, paddingHorizontal: 20, borderRadius: 26,
-    backgroundColor: colors.green, alignItems: 'center', justifyContent: 'center',
+    flexDirection: 'row', alignItems: 'center', gap: 8,
     shadowColor: '#273e34', shadowOpacity: 0.25, shadowRadius: 18, shadowOffset: { width: 0, height: 6 },
   },
-  empty: { alignItems: 'center', gap: 14, padding: 36, borderWidth: 1, borderStyle: 'dashed', borderColor: '#dcddd6', borderRadius: 12, backgroundColor: '#fbfbf9' },
-  emptyText: { color: colors.muted, fontSize: 14, textAlign: 'center' },
+  emptyText: { fontSize: 14, textAlign: 'center' },
   moreList: { gap: 2, paddingBottom: 8 },
-  navItem: { flexDirection: 'row', alignItems: 'center', gap: 12, minHeight: 48, paddingHorizontal: 12, borderRadius: 10 },
-  navIcon: { fontSize: 20, width: 26, textAlign: 'center' },
-  navText: { fontSize: 15, fontWeight: '500', color: '#62655e' },
+  navItem: { flexDirection: 'row', alignItems: 'center', gap: 12, minHeight: 52, paddingHorizontal: 12, borderRadius: 10 },
+  navText: { fontSize: 15, fontWeight: '500', flex: 1 },
+  navChevron: { opacity: 1 },
   profile: {
     flexDirection: 'row', alignItems: 'center', gap: 10, minHeight: 52,
     paddingHorizontal: 12, paddingTop: 6, marginTop: 8,
-    borderTopWidth: 1, borderTopColor: colors.lineSoft,
+    borderTopWidth: 1,
   },
-  avatar: { width: 32, height: 32, borderRadius: 10, backgroundColor: '#e5eadf', alignItems: 'center', justifyContent: 'center' },
-  avatarText: { color: '#52664e', fontSize: 12, fontWeight: '700' },
+  avatar: { width: 32, height: 32, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  avatarText: { fontSize: 12, fontWeight: '700' },
   profileMain: { flex: 1, minWidth: 0 },
-  profileEmail: { fontSize: 14, fontWeight: '600', color: colors.ink },
-  profileSub: { fontSize: 12, color: colors.muted },
+  profileEmail: { fontSize: 14, fontWeight: '600' },
+  profileSub: { fontSize: 12 },
 });

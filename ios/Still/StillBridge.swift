@@ -245,6 +245,26 @@ final class StillBridge: RCTEventEmitter {
     resolve(NSNull())
   }
 
+  /// Cuts the background out of a stored photo, replacing it with the PNG
+  /// cutout. Resolves with the new file URI. A photo with no clear subject
+  /// keeps its original and rejects with words for the screen.
+  @objc func removeBackground(
+    _ storedUri: String,
+    resolver resolve: @escaping RCTPromiseResolveBlock,
+    rejecter reject: @escaping RCTPromiseRejectBlock
+  ) {
+    do {
+      guard let url = URL(string: storedUri), url.isFileURL else {
+        throw CutoutError.unreadable
+      }
+      resolve(try BackgroundCutout.isolateSubject(of: url).absoluteString)
+    } catch let cutout as CutoutError {
+      reject("cutoutFailed", cutout.errorDescription, nil)
+    } catch {
+      reject(StillProblem.other.code, StillProblem.other.message, nil)
+    }
+  }
+
   /// Refreshes the on-device library cache from Hominem and resolves with it, API-shaped.
   @objc func syncLibrary(
     _ resolve: @escaping RCTPromiseResolveBlock, rejecter reject: @escaping RCTPromiseRejectBlock

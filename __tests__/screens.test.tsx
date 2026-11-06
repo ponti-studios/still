@@ -1,5 +1,5 @@
 import React from 'react';
-import { Image } from 'react-native';
+import { Image, TextInput } from 'react-native';
 import ReactTestRenderer from 'react-test-renderer';
 
 jest.mock('react-native-safe-area-context', () => ({
@@ -144,4 +144,62 @@ describe('screens', () => {
     expect(code).toContain('cj@ponti.io');
     expect(code).toContain('That code');
   });
+
+  it('names the sign-in fields for screen readers and autofill', () => {
+    const email = render(<SignIn account={account({})} />).root.findByType(TextInput);
+    expect(email.props.accessibilityLabel).toBe('Email address');
+    expect(email.props.textContentType).toBe('emailAddress');
+    const code = render(
+      <SignIn account={account({ step: 'codeSent', pendingEmail: 'cj@ponti.io' })} />,
+    ).root.findByType(TextInput);
+    expect(code.props.accessibilityLabel).toBe('Sign-in code');
+    expect(code.props.textContentType).toBe('oneTimeCode');
+  });
+
+  it('says why Add item does nothing without a name', async () => {
+    const onSave = jest.fn();
+    const renderer = render(
+      <ItemSheet containers={[]} collections={[]} categories={[]} onSave={onSave} onClose={() => undefined} />,
+    );
+    const add = pressableTitled(renderer, 'Add item');
+    expect(add).toBeTruthy();
+    await ReactTestRenderer.act(async () => {
+      await press(add!);
+    });
+    expect(onSave).not.toHaveBeenCalled();
+    expect(screenText(renderer)).toContain('Give it a name to continue.');
+  });
+
+  it('says why Create container does nothing without a name', async () => {
+    const onSave = jest.fn();
+    const renderer = render(<GroupSheet kind="container" onSave={onSave} onClose={() => undefined} />);
+    const create = pressableTitled(renderer, 'Create container');
+    expect(create).toBeTruthy();
+    await ReactTestRenderer.act(async () => {
+      press(create!);
+    });
+    expect(onSave).not.toHaveBeenCalled();
+    expect(screenText(renderer)).toContain('Give it a name to continue.');
+  });
 });
+
+/** The visible copy of a live tree, like textOf but after interaction. */
+function screenText(renderer: ReactTestRenderer.ReactTestRenderer) {
+  return leaves(renderer.toJSON() as JsonNode).join(' ');
+}
+
+/** A pressable host node whose subtree shows the title (the RN mock renders taps as host nodes). */
+function pressableTitled(renderer: ReactTestRenderer.ReactTestRenderer, title: string) {
+  const pressables = renderer.root.findAll(
+    (n) => typeof (n.props as { onPress?: unknown }).onPress === 'function',
+  );
+  return pressables.find((p) => subtreeText(p).includes(title));
+}
+
+function subtreeText(node: ReactTestRenderer.ReactTestInstance): string {
+  return node.children.map((c) => (typeof c === 'string' ? c : subtreeText(c))).join(' ');
+}
+
+function press(node: ReactTestRenderer.ReactTestInstance) {
+  return (node.props as { onPress: () => unknown }).onPress();
+}

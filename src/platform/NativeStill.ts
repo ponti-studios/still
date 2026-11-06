@@ -25,6 +25,8 @@ type NativeStillApi = {
   savePhoto(localUri: string, filename: string): Promise<string>;
   /** Removes a stored photo, best effort. */
   deletePhoto(storedUri: string): Promise<null>;
+  /** Cuts the background out of a stored photo, replacing it. Resolves with the new file URI. */
+  removeBackground(storedUri: string): Promise<string>;
   /** Refreshes the on-device library cache from Hominem and resolves with it, API-shaped. */
   syncLibrary(): Promise<unknown>;
   /** The cached library without touching the network. Empty lists before the first sync. */

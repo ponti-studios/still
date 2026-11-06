@@ -1,25 +1,27 @@
 import type { ReactNode } from 'react';
 import { KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { colors } from './theme';
+import { SFSymbol } from './SFSymbol';
+import { radius, spacing, type, useColors } from './theme';
 
 /** A bottom sheet: scrim to dismiss, grip, title, close button. */
 export function Sheet({ title, eyebrow, onClose, children }: { title: string; eyebrow?: string; onClose: () => void; children: ReactNode }) {
   const insets = useSafeAreaInsets();
+  const colors = useColors();
   return (
     <Modal transparent animationType="slide" onRequestClose={onClose}>
       <View style={styles.overlay}>
-        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} accessibilityLabel="Close" />
+        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} accessibilityLabel="Dismiss" />
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.sheetWrap}>
-          <View style={[styles.sheet, { paddingBottom: 20 + insets.bottom }]}>
-            <View style={styles.grip} />
+          <View style={[styles.sheet, { backgroundColor: colors.surface, paddingBottom: spacing.xl + insets.bottom }]}>
+            <View style={[styles.grip, { backgroundColor: colors.line }]} />
             <View style={styles.head}>
               <View style={styles.headings}>
-                {eyebrow ? <Text style={styles.eyebrow}>{eyebrow}</Text> : null}
-                <Text style={styles.title}>{title}</Text>
+                {eyebrow ? <Text style={[styles.eyebrow, { color: colors.faint }]}>{eyebrow}</Text> : null}
+                <Text style={[styles.title, { color: colors.ink }]}>{title}</Text>
               </View>
-              <Pressable style={styles.close} onPress={onClose} accessibilityLabel="Close" hitSlop={10}>
-                <Text style={styles.closeText}>✕</Text>
+              <Pressable style={styles.close} onPress={onClose} accessibilityLabel="Close" hitSlop={8}>
+                <SFSymbol name="xmark" size={15} weight="semibold" color={colors.muted} />
               </Pressable>
             </View>
             <ScrollView keyboardShouldPersistTaps="handled">{children}</ScrollView>
@@ -31,24 +33,29 @@ export function Sheet({ title, eyebrow, onClose, children }: { title: string; ey
 }
 
 const styles = StyleSheet.create({
-  overlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: '#1c261f55' },
+  overlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(20,28,22,0.4)' },
   sheetWrap: { width: '100%', maxHeight: '92%' },
   sheet: {
-    backgroundColor: colors.surface,
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    paddingTop: 8,
-    paddingHorizontal: 20,
+    borderTopLeftRadius: radius.xl,
+    borderTopRightRadius: radius.xl,
+    paddingTop: spacing.sm,
+    paddingHorizontal: spacing.xl,
     shadowColor: '#18251e',
     shadowOpacity: 0.17,
     shadowRadius: 40,
     shadowOffset: { width: 0, height: -10 },
   },
-  grip: { width: 40, height: 4, borderRadius: 2, backgroundColor: '#dcddd6', alignSelf: 'center', marginVertical: 4 },
-  head: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 14 },
-  headings: { flex: 1, gap: 4 },
-  eyebrow: { color: colors.faint, fontSize: 11, fontWeight: '700', letterSpacing: 0.8 },
-  title: { fontSize: 21, fontWeight: '800', letterSpacing: -0.4, color: colors.ink },
-  close: { padding: 6, marginRight: -6 },
-  closeText: { fontSize: 16, color: '#6b6e67' },
+  grip: { width: 40, height: 4, borderRadius: 2, alignSelf: 'center', marginVertical: spacing.xs },
+  head: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: spacing.md },
+  headings: { flex: 1, gap: spacing.xs },
+  eyebrow: { ...type.micro },
+  title: { ...type.title },
+  close: {
+    width: 44,
+    height: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: -10,
+    marginTop: -6,
+  },
 });
