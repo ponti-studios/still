@@ -753,6 +753,15 @@ extension StillLibraryStore {
     }
   }
 
+  /// Rewrites a queued op's payload in place (the photo op records its uploaded file).
+  func updateOpPayload(id: String, payload: String) {
+    let background = container.newBackgroundContext()
+    background.performAndWait {
+      Self.outboxRow(background, id: id)?.payload = payload
+      _ = try? background.save()
+    }
+  }
+
   public func removeOp(id: String) {
     let background = container.newBackgroundContext()
     background.performAndWait {
@@ -776,7 +785,7 @@ extension StillLibraryStore {
       case .collection:
         Self.renameRow(background, entity: "CachedCollection", from: op.entityId, to: serverId)
         Self.renameLinks(background, collectionIdFrom: op.entityId, to: serverId)
-      case .membership:
+      case .membership, .photo:
         break
       }
       for row in Self.outboxRows(background) where row.id != op.id {
@@ -1005,6 +1014,8 @@ extension StillLibraryStore {
       if let collectionId = op.collectionId {
         ensureLink(context, collectionId: collectionId, entityId: op.entityId)
       }
+    case .photo:
+      break  // The photo is shown from the local file until the server copy is pulled.
     }
   }
 
@@ -1022,6 +1033,8 @@ extension StillLibraryStore {
       if let collectionId = op.collectionId {
         deleteLink(context, collectionId: collectionId, entityId: op.entityId)
       }
+    case .photo:
+      break
     }
   }
 
@@ -1118,11 +1131,18 @@ private extension Dictionary where Key == String {
 }
 
 private extension CachedPossession {
-  /// The stored metadata text back as an object; corrupt text becomes `{}`.
+  /// The stored metadata text back as an object; corrupt text becomes `{}`. A local
+  /// `imageUrl` whose file is gone (another device, a reinstall) is dropped, so the
+  /// screens fall back to the server photo instead of drawing a broken image.
   var metadataObject: Any {
     guard let data = metadata.data(using: .utf8),
-      let object = try? JSONSerialization.jsonObject(with: data)
+      var object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
     else { return [:] as [String: Any] }
+    if let image = object["imageUrl"] as? String, image.hasPrefix("file://"),
+      let url = URL(string: image), !FileManager.default.fileExists(atPath: url.path)
+    {
+      object.removeValue(forKey: "imageUrl")
+    }
     return object
   }
 }

@@ -22,6 +22,8 @@ private actor FakeLibraryService: StillAccountService {
     return Data((responses[path] ?? "{}").utf8)
   }
 
+  func upload(to url: URL, data: Data, headers: [String: String]) async throws {}
+
   func setResponses(_ responses: [String: String]) { self.responses = responses }
   func setFailure(_ failure: StillProblem?) { self.failure = failure }
   func setFailingPaths(_ paths: Set<String>) { failingPaths = paths }
@@ -70,6 +72,62 @@ private func rows(_ payload: [String: Any], _ key: String) -> [[String: Any]] {
     #expect(calls.contains("/api/possessions?since=\(sinceEpoch)&limit=5000&offset=0"))
     #expect(calls.contains("/api/collections/membership?since=\(sinceEpoch)"))
     #expect(!calls.contains(where: { $0.hasPrefix("/api/collections/c") }))
+  }
+
+  @Test func syncInjectsTheServerPhotoIntoMetadata() async throws {
+    let service = FakeLibraryService()
+    var responses = libraryResponses(possessions: lamp)
+    let key = "/api/possessions?since=\(sinceEpoch)&limit=5000&offset=0"
+    responses[key] = #"{"possessions":\#(lamp),"images":{"p1":[{"url":"https://x/b.jpg","fileId":"f2","displayOrder":1},{"url":"https://x/a.jpg","fileId":"f1","displayOrder":0}]},"tombstones":[],"serverTime":"2026-01-01T00:00:00Z"}"#
+    await service.setResponses(responses)
+    let store = StillLibraryStore(inMemory: true)
+
+    let result = try await LibrarySync(service: service, store: store).sync()
+
+    let metadata = rows(result.payload, "possessions").first?["metadata"] as? [String: Any]
+    let photo = metadata?["serverPhoto"] as? [String: Any]
+    #expect(photo?["url"] as? String == "https://x/a.jpg")
+    #expect(photo?["fileId"] as? String == "f1")
+    #expect(metadata?["vendor"] as? String == "Ikea")
+  }
+
+  @Test func syncDropsAStaleServerPhoto() async throws {
+    let service = FakeLibraryService()
+    var responses = libraryResponses(possessions: lamp)
+    let key = "/api/possessions?since=\(sinceEpoch)&limit=5000&offset=0"
+    responses[key] = #"{"possessions":\#(lamp),"images":{"p1":[{"url":"https://x/a.jpg","fileId":"f1","displayOrder":0}]},"tombstones":[],"serverTime":"2026-01-01T00:00:00Z"}"#
+    await service.setResponses(responses)
+    let store = StillLibraryStore(inMemory: true)
+    _ = try await LibrarySync(service: service, store: store).sync()
+
+    // The second pull is a delta from the saved cursor, and the photo is gone from the server.
+    let cursor = "2026-01-01T00:00:00Z"
+    await service.setResponses([
+      "/api/possessions?since=\(cursor)&limit=5000&offset=0":
+        #"{"possessions":\#(lamp),"images":{},"tombstones":[],"serverTime":"2026-01-02T00:00:00Z"}"#,
+      "/api/possessions/containers?since=\(cursor)":
+        #"{"containers":[],"tombstones":[],"serverTime":"2026-01-02T00:00:00Z"}"#,
+      "/api/collections?limit=50&since=\(cursor)":
+        #"{"collections":[],"tombstones":[],"serverTime":"2026-01-02T00:00:00Z"}"#,
+      "/api/collections/membership?since=\(cursor)":
+        #"{"membership":[],"count":0,"tombstones":[],"serverTime":"2026-01-02T00:00:00Z"}"#,
+    ])
+    let result = try await LibrarySync(service: service, store: store).sync()
+
+    let metadata = rows(result.payload, "possessions").first?["metadata"] as? [String: Any]
+    #expect(metadata?["serverPhoto"] == nil)
+  }
+
+  @Test func readSkipsALocalPhotoWhoseFileIsGone() async throws {
+    let service = FakeLibraryService()
+    let gone = "[{\"id\":\"p1\",\"name\":\"Lamp\",\"category\":\"home\",\"status\":\"owned\",\"isArchived\":false,\"acquiredDate\":null,\"priceCents\":1200,\"currencyCode\":\"GBP\",\"containerId\":\"box\",\"metadata\":{\"imageUrl\":\"file:///nowhere/missing.jpg\"},\"createdAt\":\"2025-01-10T00:00:00Z\"}]"
+    await service.setResponses(libraryResponses(possessions: gone))
+    let store = StillLibraryStore(inMemory: true)
+
+    let result = try await LibrarySync(service: service, store: store).sync()
+
+    let metadata = rows(result.payload, "possessions").first?["metadata"] as? [String: Any]
+    #expect(metadata?["imageUrl"] == nil)
   }
 
   @Test func readServesTheCacheWithoutNetwork() async throws {

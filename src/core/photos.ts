@@ -1,4 +1,5 @@
 import { NativeStill } from '../platform/NativeStill';
+import type { OutboxOp } from './library';
 
 export function photoFilename(mimetype: string): string {
   const ext = mimetype === 'image/png' ? 'png' : 'jpg';
@@ -12,6 +13,14 @@ export async function savePhoto(localUri: string, mimetype: string): Promise<str
     throw new Error('The photo could not be kept. Please try again.');
   }
   return stored;
+}
+
+/** The outbox op that uploads a stored photo and attaches it to the possession `id`. */
+export function photoUploadOp(id: string, storedUri: string): OutboxOp {
+  const localPath = decodeURIComponent(storedUri.replace(/^file:\/\//, ''));
+  const mimetype = localPath.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg';
+  const name = localPath.slice(localPath.lastIndexOf('/') + 1);
+  return { entity: 'photo', kind: 'create', entityId: id, payload: { localPath, mimetype, name } };
 }
 
 /** Removes a stored photo, best effort: local files only, failures swallowed. */

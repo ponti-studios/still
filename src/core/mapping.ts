@@ -35,7 +35,12 @@ export const prettyCategory = (category: string) => {
 export function fromPossession(p: ApiPossession, collectionIds: string[] = []): Item {
   const category = p.category ?? 'Uncategorised';
   const vendor = typeof p.metadata.vendor === 'string' ? p.metadata.vendor : undefined;
-  const imageUrl = typeof p.metadata.imageUrl === 'string' ? p.metadata.imageUrl : undefined;
+  // The on-device file wins (instant, offline); native drops it when the file is gone, and then
+  // the photo the server holds (`serverPhoto`, injected on sync) takes over.
+  const serverPhoto = p.metadata.serverPhoto as { url?: unknown } | undefined;
+  const imageUrl = typeof p.metadata.imageUrl === 'string'
+    ? p.metadata.imageUrl
+    : typeof serverPhoto?.url === 'string' ? serverPhoto.url : undefined;
   return {
     id: p.id,
     name: p.name,

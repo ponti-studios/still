@@ -43,7 +43,7 @@ export function readLibrary(): Promise<LibraryPayload> {
 }
 
 /** The kinds of write the outbox accepts. */
-export type OutboxEntity = 'possession' | 'container' | 'collection' | 'membership';
+export type OutboxEntity = 'possession' | 'container' | 'collection' | 'membership' | 'photo';
 export type OutboxKind = 'create' | 'update' | 'delete';
 
 /**

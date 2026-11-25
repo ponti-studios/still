@@ -10,7 +10,7 @@ import {
   takeNotices,
 } from './library';
 import { fromContainer, fromPossession, toPossessionPayload } from './mapping';
-import { deleteStoredPhoto } from './photos';
+import { deleteStoredPhoto, photoUploadOp } from './photos';
 import { STATUS_PATH, type Group, type GroupKind, type Item, type ItemInput } from './types';
 import { onLibraryChanged, onStatusChanged, libraryStatus } from '../platform/NativeStill';
 
@@ -149,6 +149,8 @@ export function useStore() {
       const ops: OutboxOp[] = [
         { entity: 'possession', kind: 'create', entityId: id, payload: { ...toPossessionPayload(input), externalId: id } },
         ...membershipOps(id, [], input.collectionIds),
+        // After the possession op, so the photo has a server row to attach to.
+        ...(input.imageUrl?.startsWith('file://') ? [photoUploadOp(id, input.imageUrl)] : []),
       ];
       try {
         for (const op of ops) await enqueueOp(op);
@@ -167,6 +169,7 @@ export function useStore() {
         ops.push({ entity: 'possession', kind: 'update', entityId: id, payload });
       }
       if (patch.collectionIds) ops.push(...membershipOps(id, current.collectionIds, patch.collectionIds));
+      if (patch.imageUrl?.startsWith('file://')) ops.push(photoUploadOp(id, patch.imageUrl));
       return run(patchItem(id, patch), ops);
     },
     deleteItem: (id: string) => {
