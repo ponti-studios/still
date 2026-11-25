@@ -1,5 +1,5 @@
 import { fromPossession, toPossessionPayload } from '../src/core/mapping';
-import { deleteStoredPhoto, photoFilename, removePhotoBackground, savePhoto } from '../src/core/photos';
+import { deleteStoredPhoto, photoFilename, photoUploadOp, removePhotoBackground, savePhoto } from '../src/core/photos';
 import type { ApiPossession } from '../src/core/apiTypes';
 
 const mockSave = jest.fn();
@@ -98,5 +98,28 @@ describe('item photos', () => {
 
   it('leaves metadata alone when the photo is untouched', () => {
     expect(toPossessionPayload({ name: 'Lamp' })).toEqual({ name: 'Lamp' });
+  });
+
+  it('falls back to the server photo when there is no local file', () => {
+    expect(fromPossession(possession({ serverPhoto: { url: 'https://r2/x.jpg', fileId: 'f1' } }))).toMatchObject({
+      imageUrl: 'https://r2/x.jpg',
+    });
+  });
+
+  it('prefers the on-device file over the server photo', () => {
+    const item = fromPossession(
+      possession({ imageUrl: 'file:///stored/x.jpg', serverPhoto: { url: 'https://r2/x.jpg', fileId: 'f1' } }),
+    );
+    expect(item.imageUrl).toBe('file:///stored/x.jpg');
+  });
+
+  it('builds the upload op from a stored file URI', () => {
+    expect(photoUploadOp('p1', 'file:///stored/item-photo-1.jpg')).toEqual({
+      entity: 'photo', kind: 'create', entityId: 'p1',
+      payload: { localPath: '/stored/item-photo-1.jpg', mimetype: 'image/jpeg', name: 'item-photo-1.jpg' },
+    });
+    expect(photoUploadOp('p1', 'file:///stored/cut%20out.PNG').payload).toEqual({
+      localPath: '/stored/cut out.PNG', mimetype: 'image/png', name: 'cut out.PNG',
+    });
   });
 });

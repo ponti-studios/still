@@ -1,7 +1,8 @@
 import Foundation
 
-/// Item photos live on the device, never on the server: plain files under Application Support.
-/// An item carries only the local file URI; a missing file just shows the emoji fallback.
+/// Item photos are kept on the device as plain files under Application Support, so they show
+/// instantly and offline. The outbox also uploads each one to Hominem; if the local file is ever
+/// gone, the item falls back to the server copy, then to the emoji.
 public protocol StillPhotoStore: Sendable {
   /// Copies a picked photo into Still's own folder. Returns the stored file URL.
   func savePhoto(from source: URL, filename: String) throws -> URL

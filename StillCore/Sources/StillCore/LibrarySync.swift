@@ -57,7 +57,7 @@ public struct LibrarySync: Sendable {
       containersData, collectionsData, membershipData)
 
     var delta = LibraryDelta(
-      possessions: possessionPage.rows,
+      possessions: Self.withServerPhotos(possessionPage.rows, images: possessionPage.images),
       containers: try Self.rows(containersJson, key: "containers"),
       collections: try Self.rows(collectionsJson, key: "collections"),
       membership: try Self.membershipLinks(membershipJson),
@@ -95,8 +95,12 @@ public struct LibrarySync: Sendable {
   /// walk without doubles.
   private func fetchPossessions(
     since: String
-  ) async throws -> (rows: [[String: Any]], tombstones: [LibraryTombstone], serverTime: String?) {
+  ) async throws -> (
+    rows: [[String: Any]], tombstones: [LibraryTombstone], images: [String: [String: Any]],
+    serverTime: String?
+  ) {
     var all: [[String: Any]] = []
+    var images: [String: [String: Any]] = [:]
     var tombstones: [LibraryTombstone] = []
     var times: [String] = []
     var seen = Set<String>()
@@ -107,6 +111,7 @@ public struct LibrarySync: Sendable {
         method: "GET", path: "/api/possessions?since=\(since)&limit=\(limit)&offset=\(offset)", body: nil)
       let page = try Self.rows(data, key: "possessions")
       tombstones.append(contentsOf: Self.tombstones(data))
+      images.merge(Self.firstImages(data)) { _, new in new }
       if let time = Self.serverTime(data) { times.append(time) }
       var added = 0
       for row in page {
@@ -118,7 +123,46 @@ public struct LibrarySync: Sendable {
       offset += page.count
       limit = 1000
     }
-    return (all, tombstones, times.min())
+    return (all, tombstones, images, times.min())
+  }
+
+  /// The first photo of each possession in a page (lowest `displayOrder`), keyed
+  /// by possession id. A response without an `images` map yields nothing.
+  private static func firstImages(_ data: Data) -> [String: [String: Any]] {
+    guard let object = try? JSONSerialization.jsonObject(with: data),
+      let json = object as? [String: Any],
+      let map = json["images"] as? [String: [[String: Any]]]
+    else { return [:] }
+    var first: [String: [String: Any]] = [:]
+    for (possessionId, images) in map {
+      let ordered = images.sorted {
+        ($0["displayOrder"] as? Int ?? 0) < ($1["displayOrder"] as? Int ?? 0)
+      }
+      if let image = ordered.first(where: { $0["url"] is String && $0["fileId"] is String }) {
+        first[possessionId] = image
+      }
+    }
+    return first
+  }
+
+  /// Puts the server photo into each possession's metadata as
+  /// `serverPhoto = {url, fileId}`. It is cache-only (the outbox strips it on the
+  /// way out), and a possession without a photo loses any stale one.
+  static func withServerPhotos(
+    _ rows: [[String: Any]], images: [String: [String: Any]]
+  ) -> [[String: Any]] {
+    rows.map { row in
+      guard let id = row["id"] as? String else { return row }
+      var row = row
+      var metadata = row["metadata"] as? [String: Any] ?? [:]
+      if let image = images[id], let url = image["url"], let fileId = image["fileId"] {
+        metadata["serverPhoto"] = ["url": url, "fileId": fileId]
+      } else {
+        metadata.removeValue(forKey: "serverPhoto")
+      }
+      row["metadata"] = metadata
+      return row
+    }
   }
 
   /// The batch membership index as (collection id, possession id) links.

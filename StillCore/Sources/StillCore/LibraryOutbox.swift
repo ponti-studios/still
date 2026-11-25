@@ -12,6 +12,10 @@ import Foundation
 public struct LibraryOp: Sendable, Equatable {
   public enum Entity: String, Sendable {
     case possession, container, collection, membership
+    /// A possession's photo: the bytes live on the device until the outbox uploads them.
+    /// The payload is `{localPath, mimetype, name, fileId?}`; `fileId` appears once the
+    /// upload has landed, so a retry after a failed attach never uploads twice.
+    case photo
   }
   public enum Kind: String, Sendable {
     case create, update, delete
@@ -159,8 +163,9 @@ public struct LibraryOutbox: Sendable {
           throw problem
         case .noService:
           return .offline
-        case .notFound where op.kind == .delete:
-          // Already gone: the delete is idempotent, so this is success.
+        case .notFound where op.kind == .delete || op.entity == .photo:
+          // Already gone: a delete is idempotent, and a photo for a possession that no
+          // longer exists has nowhere to go.
           store.removeOp(id: op.id)
         case .rejected:
           store.removeOp(id: op.id)
@@ -178,9 +183,12 @@ public struct LibraryOutbox: Sendable {
   private func send(_ op: LibraryOp) async throws -> String? {
     switch (op.entity, op.kind) {
     case (.possession, .create):
-      return try await createId(path: "/api/possessions/upsert", body: op.payload)
+      return try await createId(
+        path: "/api/possessions/upsert", body: Self.withoutServerPhoto(op.payload))
     case (.possession, .update):
-      _ = try await service.request(method: "PATCH", path: "/api/possessions/\(op.entityId)", body: op.payload)
+      _ = try await service.request(
+        method: "PATCH", path: "/api/possessions/\(op.entityId)",
+        body: Self.withoutServerPhoto(op.payload))
     case (.possession, .delete):
       _ = try await service.request(method: "DELETE", path: "/api/possessions/\(op.entityId)", body: nil)
     case (.container, .create):
@@ -210,8 +218,69 @@ public struct LibraryOutbox: Sendable {
     case (.membership, .update):
       // Membership is added or removed, never patched.
       throw StillProblem.other
+    case (.photo, .create):
+      try await sendPhoto(op)
+    case (.photo, .update), (.photo, .delete):
+      // A newer photo replaces the queued op, and removing one is the cache's business.
+      throw StillProblem.other
     }
     return nil
+  }
+
+  /// Upload → complete → attach. The bytes go straight to storage on a presigned URL, so the
+  /// session cookies never leave for another host.
+  /// `metadata.serverPhoto` is a cache of what the server already has; sending it
+  /// back would write the signed URL into the possession's own metadata.
+  static func withoutServerPhoto(_ payload: String) -> String {
+    var object = LibraryOp.object(payload)
+    guard var metadata = object["metadata"] as? [String: Any],
+      metadata.removeValue(forKey: "serverPhoto") != nil
+    else { return payload }
+    object["metadata"] = metadata
+    return json(object)
+  }
+
+  private func sendPhoto(_ op: LibraryOp) async throws {
+    var payload = LibraryOp.object(op.payload)
+    var fileId = payload["fileId"] as? String
+    if fileId == nil {
+      guard let path = payload["localPath"] as? String,
+        let bytes = try? Data(contentsOf: Self.fileURL(path))
+      else { return }  // The file is gone from the device, so there is nothing to send.
+      let mimetype = payload["mimetype"] as? String ?? "image/jpeg"
+      let initBody = Self.json([
+        "originalName": payload["name"] as? String ?? "photo.jpg",
+        "mimetype": mimetype,
+        "size": bytes.count,
+      ])
+      let initData = try await service.request(
+        method: "POST", path: "/api/files/uploads", body: initBody)
+      guard let ticket = try? JSONSerialization.jsonObject(with: initData) as? [String: Any],
+        let id = ticket["id"] as? String,
+        let uploadUrl = (ticket["uploadUrl"] as? String).flatMap(URL.init(string:))
+      else { throw StillProblem.other }
+      var headers = ticket["headers"] as? [String: String] ?? [:]
+      if headers.isEmpty { headers["Content-Type"] = mimetype }
+      try await service.upload(to: uploadUrl, data: bytes, headers: headers)
+      _ = try await service.request(
+        method: "POST", path: "/api/files/uploads/\(id)/complete", body: "{}")
+      fileId = id
+      payload["fileId"] = id
+      store.updateOpPayload(id: op.id, payload: Self.json(payload))
+    }
+    guard let fileId else { return }
+    _ = try await service.request(
+      method: "POST", path: "/api/possessions/\(op.entityId)/images",
+      body: Self.json(["fileId": fileId]))
+  }
+
+  private static func fileURL(_ path: String) -> URL {
+    path.hasPrefix("file://") ? (URL(string: path) ?? URL(fileURLWithPath: path)) : URL(fileURLWithPath: path)
+  }
+
+  private static func json(_ object: [String: Any]) -> String {
+    guard let data = try? JSONSerialization.data(withJSONObject: object) else { return "{}" }
+    return String(data: data, encoding: .utf8) ?? "{}"
   }
 
   /// The upsert endpoints answer `{ "id": ..., "created": bool }`.

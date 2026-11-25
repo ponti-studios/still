@@ -28,8 +28,13 @@ private actor FakeOutboxService: StillAccountService {
     return Data((responses[path] ?? "{}").utf8)
   }
 
+  func upload(to url: URL, data: Data, headers: [String: String]) async throws {
+    calls.append(Call(method: "PUT", path: url.absoluteString, body: "\(data.count) bytes"))
+    if let failure = failures[url.absoluteString] { throw failure }
+  }
+
   func setResponse(_ path: String, _ json: String) { responses[path] = json }
-  func setFailure(_ path: String, _ problem: StillProblem) { failures[path] = problem }
+  func setFailure(_ path: String, _ problem: StillProblem?) { failures[path] = problem }
   func takeCalls() -> [Call] {
     defer { calls = [] }
     return calls
@@ -57,6 +62,20 @@ private func membershipOp(collectionId: String, entityId: String, kind: LibraryO
   LibraryOp(
     id: UUID().uuidString, entity: .membership, kind: kind, entityId: entityId,
     payload: #"{"collectionId":"\#(collectionId)"}"#, createdAt: LibraryOp.now())
+}
+
+private func photoOp(id: String, path: String, fileId: String? = nil) -> LibraryOp {
+  let extra = fileId.map { #","fileId":"\#($0)""# } ?? ""
+  return LibraryOp(
+    id: UUID().uuidString, entity: .photo, kind: .create, entityId: id,
+    payload: #"{"localPath":"\#(path)","mimetype":"image/jpeg","name":"lamp.jpg"\#(extra)}"#,
+    createdAt: LibraryOp.now())
+}
+
+private func tempPhoto() throws -> String {
+  let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).jpg")
+  try Data([0xFF, 0xD8, 0xFF, 0xD9]).write(to: url)
+  return url.path
 }
 
 @Suite struct StillOutboxTests {
@@ -107,6 +126,15 @@ private func membershipOp(collectionId: String, entityId: String, kind: LibraryO
     #expect(ops.first?.entity == .possession)
     #expect(ops.first?.kind == .create)
     #expect(ops.last?.entity == .membership)
+  }
+
+  @Test func serverPhotoCacheNeverGoesBackToTheServer() {
+    let payload = #"{"name":"Lamp","metadata":{"vendor":"Ikea","serverPhoto":{"url":"https://x/a.jpg","fileId":"f1"}}}"#
+    let stripped = LibraryOutbox.withoutServerPhoto(payload)
+    #expect(!stripped.contains("serverPhoto"))
+    #expect(stripped.contains("Ikea"))
+    let plain = #"{"name":"Lamp"}"#
+    #expect(LibraryOutbox.withoutServerPhoto(plain) == plain)
   }
 
   @Test func flushSendsAnIdempotentCreateAndRenamesTheRow() async throws {
@@ -228,5 +256,88 @@ private func membershipOp(collectionId: String, entityId: String, kind: LibraryO
     store.reapplyPendingOps()
 
     #expect(rows(store.readPayload(), "possessions").first?["name"] as? String == "Desk Lamp")
+  }
+
+  @Test func photoUploadsCompletesThenAttaches() async throws {
+    let service = FakeOutboxService()
+    await service.setResponse(
+      "/api/files/uploads",
+      #"{"id":"file-1","method":"PUT","uploadUrl":"https://r2.example/put","headers":{"Content-Type":"image/jpeg"}}"#)
+    let store = StillLibraryStore(inMemory: true)
+    store.enqueue(photoOp(id: "p1", path: try tempPhoto()))
+
+    let outcome = try await LibraryOutbox(service: service, store: store).flush()
+
+    #expect(outcome == .done(LibraryOutbox.Summary(notices: [], hadRejection: false)))
+    #expect(store.pendingOps().isEmpty)
+    let calls = await service.takeCalls().map { "\($0.method) \($0.path)" }
+    #expect(
+      calls == [
+        "POST /api/files/uploads", "PUT https://r2.example/put",
+        "POST /api/files/uploads/file-1/complete", "POST /api/possessions/p1/images",
+      ])
+  }
+
+  @Test func photoRetryAfterAFailedAttachSkipsTheUpload() async throws {
+    let service = FakeOutboxService()
+    await service.setResponse(
+      "/api/files/uploads",
+      #"{"id":"file-1","uploadUrl":"https://r2.example/put","headers":{}}"#)
+    await service.setFailure("/api/possessions/p1/images", .noService)
+    let store = StillLibraryStore(inMemory: true)
+    store.enqueue(photoOp(id: "p1", path: try tempPhoto()))
+    let outbox = LibraryOutbox(service: service, store: store)
+
+    #expect(try await outbox.flush() == .offline)
+    #expect(store.pendingOps().first?.payload.contains("file-1") == true)
+    _ = await service.takeCalls()
+    await service.setFailure("/api/possessions/p1/images", nil)
+
+    _ = try await outbox.flush()
+
+    let calls = await service.takeCalls().map { "\($0.method) \($0.path)" }
+    #expect(calls == ["POST /api/possessions/p1/images"])
+    #expect(store.pendingOps().isEmpty)
+  }
+
+  @Test func photoWhoseFileIsGoneIsDroppedQuietly() async throws {
+    let service = FakeOutboxService()
+    let store = StillLibraryStore(inMemory: true)
+    store.enqueue(photoOp(id: "p1", path: "/nonexistent/lamp.jpg"))
+
+    let outcome = try await LibraryOutbox(service: service, store: store).flush()
+
+    #expect(outcome == .done(LibraryOutbox.Summary(notices: [], hadRejection: false)))
+    #expect(store.pendingOps().isEmpty)
+    #expect(await service.takeCalls().isEmpty)
+  }
+
+  @Test func photoForAGonePossessionIsDropped() async throws {
+    let service = FakeOutboxService()
+    await service.setResponse(
+      "/api/files/uploads", #"{"id":"file-1","uploadUrl":"https://r2.example/put","headers":{}}"#)
+    await service.setFailure("/api/possessions/p1/images", .notFound)
+    let store = StillLibraryStore(inMemory: true)
+    store.enqueue(photoOp(id: "p1", path: try tempPhoto()))
+
+    let outcome = try await LibraryOutbox(service: service, store: store).flush()
+
+    #expect(outcome == .done(LibraryOutbox.Summary(notices: [], hadRejection: false)))
+    #expect(store.pendingOps().isEmpty)
+  }
+
+  @Test func photoFollowsTheServerIdOfItsPossession() async throws {
+    let service = FakeOutboxService()
+    await service.setResponse("/api/possessions/upsert", #"{"id":"server-1","created":true}"#)
+    await service.setResponse(
+      "/api/files/uploads", #"{"id":"file-1","uploadUrl":"https://r2.example/put","headers":{}}"#)
+    let store = StillLibraryStore(inMemory: true)
+    store.enqueue(possessionCreate(id: "client-1", name: "Lamp"))
+    store.enqueue(photoOp(id: "client-1", path: try tempPhoto()))
+
+    _ = try await LibraryOutbox(service: service, store: store).flush()
+
+    let calls = await service.takeCalls().map { $0.path }
+    #expect(calls.last == "/api/possessions/server-1/images")
   }
 }

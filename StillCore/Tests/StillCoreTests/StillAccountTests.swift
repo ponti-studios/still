@@ -39,6 +39,10 @@ actor FakeAccountService: StillAccountService {
     return Data(response.utf8)
   }
 
+  func upload(to url: URL, data: Data, headers: [String: String]) async throws {
+    if let failure { throw failure }
+  }
+
   var requests: [(method: String, path: String, body: String?)] = []
   var response = "{}"
 }

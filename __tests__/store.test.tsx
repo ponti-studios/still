@@ -46,6 +46,9 @@ jest.mock('../src/core/photos', () => ({
   savePhoto: jest.fn(),
   photoFilename: jest.fn(),
   deleteStoredPhoto: (...args: unknown[]) => mockDeleteStoredPhoto(...args),
+  photoUploadOp: (id: string, uri: string) => ({
+    entity: 'photo', kind: 'create', entityId: id, payload: { localPath: uri.slice(7) },
+  }),
 }));
 
 const possession = {
@@ -183,6 +186,41 @@ describe('useStore', () => {
     expect(update).toMatchObject({
       entity: 'possession', kind: 'update', entityId: 'p1', payload: { name: 'Desk Lamp' },
     });
+  });
+
+  it('queues a photo upload after the possession when a new item has a local photo', async () => {
+    mockSync.mockResolvedValue(emptyLibrary);
+    const seen = mount();
+    await flush();
+
+    await ReactTestRenderer.act(async () => {
+      await seen.current?.addItem({
+        name: 'Chair', category: 'home', status: 'Owned', value: 30, currency: 'GBP',
+        vendor: undefined, containerId: undefined, collectionIds: [], imageUrl: 'file:///stored/x.jpg',
+      });
+    });
+
+    const ops = mockEnqueue.mock.calls.map(([op]) => op);
+    const create = ops.findIndex((op) => op.entity === 'possession');
+    const photo = ops.findIndex((op) => op.entity === 'photo');
+    expect(photo).toBeGreaterThan(create);
+    expect(ops[photo]).toMatchObject({ kind: 'create', entityId: ops[create].entityId });
+  });
+
+  it('queues a photo upload when an edit sets a local photo, but not for a remote one', async () => {
+    const seen = mount();
+    await flush();
+
+    await ReactTestRenderer.act(async () => {
+      await seen.current?.updateItem('p1', { imageUrl: 'file:///stored/y.jpg' });
+    });
+    expect(mockEnqueue.mock.calls.some(([op]) => op.entity === 'photo' && op.entityId === 'p1')).toBe(true);
+
+    mockEnqueue.mockClear();
+    await ReactTestRenderer.act(async () => {
+      await seen.current?.updateItem('p1', { imageUrl: 'https://r2/y.jpg' });
+    });
+    expect(mockEnqueue.mock.calls.some(([op]) => op.entity === 'photo')).toBe(false);
   });
 
   it('queues a delete and clears the photo file', async () => {

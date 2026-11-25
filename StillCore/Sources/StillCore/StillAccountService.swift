@@ -18,6 +18,10 @@ public protocol StillAccountService: Sendable {
   /// (never `/api/auth/...`). The session cookies stay in the Keychain; `body` is JSON text or
   /// nil. Throws `StillProblem`.
   func request(method: String, path: String, body: String?) async throws -> Data
+  /// A presigned `PUT` of raw bytes straight to storage, with the headers the signature covers.
+  /// No session: the URL carries its own
+  /// signature, so the cookies never leave for another host. Throws `StillProblem`.
+  func upload(to url: URL, data: Data, headers: [String: String]) async throws
 }
 
 /// What went wrong, in the words the screen shows. Calm, and never "Error".
@@ -127,6 +131,23 @@ public struct HominemAccountService: StillAccountService {
       }
       return try await auth.authenticatedRequest(path: path, method: method)
     } catch { throw Self.problem(error) }
+  }
+
+  public func upload(to url: URL, data: Data, headers: [String: String]) async throws {
+    var request = URLRequest(url: url)
+    request.httpMethod = "PUT"
+    for (name, value) in headers { request.setValue(value, forHTTPHeaderField: name) }
+    let response: URLResponse
+    do {
+      (_, response) = try await URLSession.shared.upload(for: request, from: data)
+    } catch { throw StillProblem.noService }
+    guard let status = (response as? HTTPURLResponse)?.statusCode else { throw StillProblem.other }
+    switch status {
+    case 200...299: return
+    // An expired or refused signature is permanent for this URL: roll back, don't retry.
+    case 400...499: throw StillProblem.rejected
+    default: throw StillProblem.noService
+    }
   }
 
   /// An error that says nothing about whether the session is still good (no connection, a server
